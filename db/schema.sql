@@ -21,8 +21,13 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 -- ─────────────────────────────────────────────────────────────────────────
 
 CREATE TYPE org_kind      AS ENUM ('client','owner','consultant','author','standards_body','regulator');
+-- 'framework' is a coded compliance appendix; 'solutions_framework' is a
+-- scored solutions matrix. Same word on the cover, different atomic unit, so
+-- they dispatch to different extractors. 'standard' means an external
+-- standards body's document and must stay free for one.
 CREATE TYPE doc_kind      AS ENUM ('guideline_report','framework','implementation_plan',
-                                   'crib_sheet','deck','calculator','standard','unknown');
+                                   'crib_sheet','deck','calculator','standard',
+                                   'solutions_framework','unknown');
 CREATE TYPE content_status AS ENUM ('real','draft','wip','lorem','template','mixed');
 CREATE TYPE confidentiality AS ENUM ('public','internal','client-confidential');
 CREATE TYPE node_kind     AS ENUM ('volume','chapter','section','subsection','slide','panel','sheet','matrix','table');

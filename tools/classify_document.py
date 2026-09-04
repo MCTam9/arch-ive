@@ -15,6 +15,12 @@ real corpus rather than assumed:
 - spread pagination (most pages ~2x as wide as tall)
   plus criterion-style codes or "tracker" wording        -> framework /
                                                             implementation_plan
+- spread pagination, no criterion codes, but the page
+  furniture repeats a "smart city" running title heavily -> solutions_framework
+  (same corpus family and also spread-paginated, but there is no
+  compliance-code appendix to find -- its content is a scored solutions
+  matrix, so it routes to extractors/smart_city.py rather than to the
+  compliance extractor, which would correctly decline it)
 Anything else -> ('unknown', confidence).
 """
 from __future__ import annotations
@@ -87,6 +93,15 @@ def _classify(path: Path) -> tuple[str, float]:
         if _is_spread_paginated(doc):
             sample_text = _sample_text(doc)
             low = sample_text.lower()
+            # a distinctive running-title count, not any client/place name --
+            # this document's footer repeats "smart city" on every page
+            # (600+ hits across the full text); e1/e2 only use the phrase
+            # incidentally (28-46 hits each), so a wide margin (10x+)
+            # separates the two safely. A per-30-page sample undercounts
+            # this unevenly (the phrase clusters late in the document), so
+            # the check needs the full `sample_text` scan, not a slice.
+            if low.count("smart city") >= 150:
+                return ("solutions_framework", 0.85)
             tracker_hits = low.count("tracker")
             codes_found = bool(_CRITERION_CODE_RE.search(sample_text))
             keyword_hits = sum(low.count(k) for k in ("principle", "theme", "strategy"))
