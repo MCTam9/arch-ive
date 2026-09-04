@@ -508,6 +508,14 @@ CREATE TABLE stage_crosswalk (
 CREATE TABLE item_stage (
   knowledge_item_id uuid NOT NULL REFERENCES knowledge_item(id) ON DELETE CASCADE,
   stage_id          text NOT NULL REFERENCES stage(id) ON DELETE CASCADE,
+  -- Same provenance columns as item_term, and for the same reason. Some links
+  -- come from an item's own stage cell; others from a whole-document scope
+  -- statement in its front matter, fanned out to every item in it. Both are
+  -- true, they are not equally precise, and without a confidence a filter for
+  -- "RIBA 3" returns them at identical authority. Document-scope links carry
+  -- <= 0.5; a per-item signal carries 0.9 or better.
+  assigned_by       assigned_by NOT NULL DEFAULT 'model',
+  confidence        numeric(3,2),
   PRIMARY KEY (knowledge_item_id, stage_id)
 );
 
