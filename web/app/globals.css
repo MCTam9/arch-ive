@@ -87,6 +87,26 @@ textarea {
   font-family: var(--font-body);
 }
 
+/* Chrome surfaces -- the filter rail and anything else that is furniture
+   rather than a record. Controls inside inherit the dark treatment, because a
+   default-surface <select> dropped on black is the usual way this breaks. */
+.chrome {
+  background: var(--chrome-bg);
+  color: var(--chrome-text);
+}
+
+.chrome .text-muted {
+  color: var(--chrome-muted);
+}
+
+.chrome select,
+.chrome input,
+.chrome textarea {
+  background: var(--chrome-surface);
+  color: var(--chrome-text);
+  border-color: var(--chrome-border);
+}
+
 /* ── Rule 2: hover/state transitions only, ≤120ms, honour reduced motion ── */
 .transition-fast {
   transition-duration: var(--motion-fast);

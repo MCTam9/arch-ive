@@ -83,6 +83,17 @@
   --level-3-surface: #eaf2c3;
   --level-4-surface: #cee8f6;
 
+  /* ---- chrome: the app's furniture, not its content ----
+     Theme-invariant on purpose. The filter rail is navigation, not a record,
+     and reading it as a dark band is what stops it being scanned as another
+     card of data. True black rather than --n900 so it stays a distinct
+     surface in dark mode, where the page ground is already near-black. ---- */
+  --chrome-bg: #000000;
+  --chrome-text: var(--n100);
+  --chrome-muted: var(--n400);
+  --chrome-surface: var(--n800);
+  --chrome-border: var(--n600);
+
   /* ---- type scale (verbatim spec values) ---- */
   --fs-micro: 10px; /* below the 12px bitmap floor: mono/body only, never bitmap */
   --fs-label: 12px; /* bitmap floor */

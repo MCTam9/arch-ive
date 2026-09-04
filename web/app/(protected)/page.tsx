@@ -40,9 +40,9 @@ export default async function BrowsePage({
   return (
     <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", minHeight: "calc(100dvh - 60px)" }}>
       <aside
-        className="surface-sunken"
+        className="chrome"
         style={{
-          borderRight: "var(--border-width) solid var(--border)",
+          borderRight: "var(--border-width) solid var(--chrome-border)",
           padding: "var(--s-4)",
         }}
       >
@@ -68,7 +68,7 @@ export default async function BrowsePage({
               name="q"
               defaultValue={sp.q}
               className="font-body"
-              style={{ padding: "var(--s-2)", border: "var(--border-width) solid var(--border-strong)", background: "var(--surface)" }}
+              style={{ padding: "var(--s-2)", border: "var(--border-width) solid var(--chrome-border)" }}
             />
           </label>
           <button
@@ -157,7 +157,7 @@ function FacetSelect({
         name={name}
         defaultValue={value ?? ""}
         className="font-mono"
-        style={{ padding: "var(--s-2)", border: "var(--border-width) solid var(--border-strong)", background: "var(--surface)" }}
+        style={{ padding: "var(--s-2)", border: "var(--border-width) solid var(--chrome-border)" }}
       >
         <option value="">all</option>
         {options.map((o) => (
