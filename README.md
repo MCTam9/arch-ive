@@ -32,7 +32,7 @@ cites back to a page.
 db/           schema.sql — the four layers, RLS policies, ingest job tables
 tools/        pipeline stages and the inbox watcher
 extractors/   one module per document shape, dispatched by classifier
-scripts/      leak gate: forbidden-term scanner and git hooks
+scripts/      repo gates: forbidden-term scanner, WAT layering check, git hooks
 workflows/    markdown SOPs (see CLAUDE.md)
 inbox/        drop zone — gitignored, never committed
 private/      real names and mappings — separate private repo, gitignored
@@ -62,6 +62,11 @@ python3 tools/ingest_status.py           # what happened
 ```
 
 ## Contributing
+
+The architecture is Workflows / Agents / Tools (see CLAUDE.md): markdown SOPs
+in `workflows/` say what to do, Python in `tools/` does it, and the agent
+coordinates. `scripts/check_wat.py` enforces that split in the pre-commit hook
+and in CI — a runnable tool with no workflow behind it fails the commit.
 
 Identifiers in this repo are opaque by policy: documents are referred to by
 slug, organisations by id. A pre-commit hook and a CI job reject commits —

@@ -4,6 +4,14 @@
 and verify by restoring it — an encrypted backup you have never restored is
 not a backup.
 
+## Tools
+
+| | |
+|---|---|
+| `tools/archive_original.py` | called by the ingest stage runner: files locally, pushes encrypted |
+| `tools/archive_backfill.py` | fills the gap for documents ingested before R2 existed |
+| `tools/fetch_original.py` | restores one document, hash-verified |
+
 ## Inputs
 
 - `private/rclone.conf` — the R2 remote plus the `crypt` wrapper. Gitignored.

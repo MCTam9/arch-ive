@@ -3,6 +3,24 @@
 **Objective.** Teach the pipeline a document shape it does not yet understand,
 without touching the daemon, the stage runner or any other extractor.
 
+## The registry — what is already handled
+
+Check here before writing anything. Loosening an existing extractor to swallow
+a new shape is how one silently starts claiming another's documents.
+
+| Module | `doc_kinds` | Shape |
+|---|---|---|
+| `extractors/crib_sheet.py` | `crib_sheet` | the 2-page graded assessment grids; column bands recovered per file |
+| `extractors/compliance_table.py` | `implementation_plan`, `framework` | coded `strategy → KPI + target + stage` tables |
+| `extractors/smart_city.py` | `solutions_framework` | solution-scoring matrices — shares a page geometry and a family with the compliance volumes but not an atomic unit, which is why it needed its own `doc_kind` |
+| `extractors/typology_catalogue.py` | `guideline_report` | typologies, prototypes and clusters against a declared design-variable vocabulary |
+| `extractors/spreadsheet.py` | `calculator` | sheets, cells and formulas → `template_parameter` |
+| `extractors/deck.py` | `deck` | slide decks, heavily image-only |
+| `extractors/generic.py` | `unknown`, `guideline_report`, `deck`, `standard` | fallback: pages, chunks, full-text. Still searchable, never silently discarded |
+
+`scripts/check_wat.py` fails if a module in `extractors/` is missing from this
+table, so the registry cannot quietly go stale.
+
 ## When this applies
 
 A document ingests but yields few or no typed knowledge items, and inspection

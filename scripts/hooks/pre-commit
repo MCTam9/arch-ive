@@ -1,4 +1,32 @@
 #!/bin/sh
-# Blocks confidential names in staged content and paths.
+# Three gates, in the order a mistake is cheapest to catch.
 # Enabled via: scripts/setup_hooks.sh  (sets core.hooksPath=scripts/hooks)
-exec python3 "$(git rev-parse --show-toplevel)/scripts/scan_forbidden.py" --staged
+set -e
+
+ROOT="$(git rev-parse --show-toplevel)"
+
+# ── identity ─────────────────────────────────────────────────────────────
+# Commits from this machine go out as MCTam9. This existed as a convention and
+# a global git config, and a repo-local user.email beat both silently: 29
+# commits were authored and pushed under the wrong address, and GitHub
+# attributes by author email, so the public history listed a contributor who
+# had never been invited. Fixing it meant rewriting every commit.
+#
+# Deliberate exception:  ARCHIVE_ALLOWED_EMAIL=other@example.com git commit ...
+EXPECTED="${ARCHIVE_ALLOWED_EMAIL:-manchengtam004@gmail.com}"
+ACTUAL="$(git var GIT_AUTHOR_IDENT | sed -n 's/.*<\(.*\)>.*/\1/p')"
+if [ "$ACTUAL" != "$EXPECTED" ]; then
+  echo "pre-commit: refusing to commit as <$ACTUAL>; this repo commits as <$EXPECTED>." >&2
+  echo "  git config --local user.name  MCTam9" >&2
+  echo "  git config --local user.email $EXPECTED" >&2
+  exit 1
+fi
+
+# ── WAT layering (CLAUDE.md) ─────────────────────────────────────────────
+# Workflows are the instruction layer and they rot first: a tool that works is
+# its own reward, the SOP saying when to run it is not. Deployment and database
+# provisioning both reached production with no workflow at all.
+python3 "$ROOT/scripts/check_wat.py" --quiet
+
+# ── confidential names ───────────────────────────────────────────────────
+exec python3 "$ROOT/scripts/scan_forbidden.py" --staged

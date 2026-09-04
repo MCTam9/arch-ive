@@ -5,7 +5,7 @@ copyrighted, and names clients, consultants and individuals. None of that
 enters git — ever, including history, filenames, branch names and commit
 messages.
 
-## The four gates
+## The five gates
 
 **1. `.gitignore`, written before `git init`.** Excludes `private/`, `inbox/`,
 `.tmp/`, the source folders, `*.pdf`, `*.xlsx`, `.env*` and `rclone.conf`.
@@ -33,7 +33,16 @@ email, so the history showed a contributor who had never been invited. Fixing
 it meant rewriting every commit and force-pushing. Set
 `ARCHIVE_ALLOWED_EMAIL` to commit under a different identity deliberately.
 
-**4. Policy backstop.** `git add -f` bypasses `.gitignore`, so the hook also
+**4. WAT layering.** `scripts/check_wat.py` enforces the architecture in
+CLAUDE.md mechanically: every runnable tool is named by a workflow, every
+extractor appears in the registry in `workflows/add_extractor.md`, no workflow
+points at nothing, execution stays in `tools/` `extractors/` `scripts/`
+`web/scripts/` `tests/`, and env files stay in the sanctioned set. Written
+because the workflow layer had visibly drifted — deployment and database
+provisioning both reached production as tools plus ad-hoc shell with no SOP at
+all, so each run was reconstructed from memory. Runs in the hook and in CI.
+
+**5. Policy backstop.** `git add -f` bypasses `.gitignore`, so the hook also
 rejects source-material file extensions and blobs over 5 MB regardless of
 ignore rules. This was found by red-teaming the gate, not by reasoning about
 it — a 21 MB PDF staged cleanly before it existed.

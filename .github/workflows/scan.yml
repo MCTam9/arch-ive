@@ -34,6 +34,10 @@ jobs:
             exit 1
           fi
 
+      - name: WAT layering
+        # Structural check on the repo itself -- no denylist secret needed.
+        run: python3 scripts/check_wat.py
+
       - name: Scan tracked files
         env:
           SCAN_DENYLIST: ${{ secrets.SCAN_DENYLIST }}
