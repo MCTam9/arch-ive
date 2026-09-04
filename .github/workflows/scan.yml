@@ -1,0 +1,58 @@
+name: scan
+
+# The repo is public; the corpus it indexes is not. This is the CI half of the
+# leak gate -- the term list lives in a repository secret, so the check runs in
+# the open without publishing what it looks for.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  forbidden-terms:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Confirm the denylist secret is present
+        env:
+          SCAN_DENYLIST: ${{ secrets.SCAN_DENYLIST }}
+        run: |
+          if [ -z "$SCAN_DENYLIST" ]; then
+            echo "::error::SCAN_DENYLIST secret is not set. Failing closed."
+            echo "Fork PRs cannot read secrets -- such PRs must be reviewed by hand."
+            exit 1
+          fi
+
+      - name: Scan tracked files
+        env:
+          SCAN_DENYLIST: ${{ secrets.SCAN_DENYLIST }}
+        run: |
+          git ls-files -z | xargs -0 python3 scripts/scan_forbidden.py --paths
+
+      - name: Scan full history
+        env:
+          SCAN_DENYLIST: ${{ secrets.SCAN_DENYLIST }}
+        run: |
+          git log --format='%B%n%an%n%ae' --all \
+            | python3 scripts/scan_forbidden.py --stdin
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

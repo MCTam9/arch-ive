@@ -1,0 +1,44 @@
+# ─── DATA: never commit source material ────────────────────────────────
+# These are third-party client deliverables under copyright.
+private/
+inbox/
+.tmp/
+*.pdf
+*.xlsx
+*.xls
+*.docx
+*.pptx
+
+# Legacy drop folders (pre-inbox). Contents move to inbox/ during ingest.
+/Excel/
+/PDF/
+/Report - Guidance/
+/Table - PDF/
+
+# ─── SECRETS ───────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+rclone.conf
+credentials.json
+token.json
+
+# ─── BUILD / RUNTIME ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+node_modules/
+.next/
+out/
+dist/
+*.log
+.ingest.lock
+
+# ─── OS ────────────────────────────────────────────────────────────────
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes

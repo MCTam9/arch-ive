@@ -1,0 +1,4 @@
+#!/bin/sh
+# Blocks confidential names in staged content and paths.
+# Enabled via: scripts/setup_hooks.sh  (sets core.hooksPath=scripts/hooks)
+exec python3 "$(git rev-parse --show-toplevel)/scripts/scan_forbidden.py" --staged
