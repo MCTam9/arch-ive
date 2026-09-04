@@ -207,7 +207,14 @@ def _checks() -> list[tuple[str, bool, str]]:
         try:
             from tools.search import search as hybrid_search
             hits = hybrid_search(conn, "shading facades", limit=10)
-            check("search() excludes the draft guidance item", all(h["item_type"] != "guidance" for h in hits), str(hits))
+            # Scope to this fixture's own document: the dev database also holds
+            # the real corpus, whose genuine (content_status='real') guidance
+            # legitimately matches this query. The claim under test is only
+            # that THIS document's draft item is withheld.
+            mine = [h for h in hits
+                    if (h.get("citation") or {}).get("document_slug") == SLUG]
+            check("search() excludes the draft guidance item",
+                  all(h["item_type"] != "guidance" for h in mine), str(mine))
         except Exception as exc:  # pragma: no cover - search.py is a sibling module, not under test here
             check("search() excludes the draft guidance item", False, f"search() raised: {exc}")
 

@@ -78,7 +78,7 @@ CREATE TABLE source_document (
   r2_key             text,                     -- encrypted object key, never a URL
   archived_at        timestamptz,
   original_filename  text,
-  supersedes_id      uuid REFERENCES source_document(id),
+  supersedes_id      uuid REFERENCES source_document(id) ON DELETE SET NULL,
   is_current         boolean NOT NULL DEFAULT true,
   ingested_at        timestamptz NOT NULL DEFAULT now(),
   UNIQUE (sha256)
@@ -223,7 +223,7 @@ CREATE TABLE framework (
   owner_org_id  text REFERENCES organisation(id),
   version       text,
   rating_scale_id uuid REFERENCES rating_scale(id),
-  document_id   uuid REFERENCES source_document(id)
+  document_id   uuid REFERENCES source_document(id) ON DELETE SET NULL
 );
 
 CREATE TABLE criterion (
@@ -303,7 +303,7 @@ CREATE INDEX ON benchmark (metric_id, target_year, building_use_id);
 CREATE TABLE design_variable (
   id       text PRIMARY KEY,                   -- 'access_typology'
   name     text NOT NULL,                      -- 'ACCESS TYPOLOGY'
-  document_id uuid REFERENCES source_document(id),
+  document_id uuid REFERENCES source_document(id) ON DELETE SET NULL,
   ordinal  int NOT NULL DEFAULT 0
 );
 

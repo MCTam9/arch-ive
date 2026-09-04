@@ -152,3 +152,19 @@ CRIB_SHEET = CribSheetExtractor()
 pipeline.register(CRIB_SHEET)
 ```
 with `doc_kinds: tuple[str, ...]` on the class.
+
+## Testing
+
+Tests run against a **separate** database, created once:
+
+```sh
+psql "$ADMIN_URL" -c 'CREATE DATABASE arch_test'
+psql "$ADMIN_URL/arch_test" -f db/schema.sql
+psql "$ADMIN_URL/arch_test" -f db/seed.sql     # needs SET app.account_id first
+./.venv/bin/python -m pytest tests/ -q
+```
+
+`tests/conftest.py` redirects `DATABASE_URL` before any test imports a tool.
+This is not optional hygiene: test fixtures create and delete documents using
+the same slugs the corpus uses, so sharing one database means a test run
+silently deletes real rows. That happened twice before conftest.py existed.
