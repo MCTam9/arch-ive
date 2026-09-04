@@ -33,13 +33,15 @@ export default async function LoginPage({
       >
         <h1
           className="font-display"
-          style={{ fontSize: "var(--fs-h1)", margin: 0, color: "var(--n900)" }}
+          style={{
+            fontSize: "var(--fs-h1)",
+            // the strapline under this used to carry the gap to the button
+            margin: "0 0 var(--s-6)",
+            color: "var(--n900)",
+          }}
         >
           arch-ive
         </h1>
-        <p className="text-muted" style={{ marginTop: "var(--s-2)", marginBottom: "var(--s-6)" }}>
-          Sign in with an account on the allowlist.
-        </p>
 
         {error && (
           <p
