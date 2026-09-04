@@ -5,7 +5,7 @@ copyrighted, and names clients, consultants and individuals. None of that
 enters git — ever, including history, filenames, branch names and commit
 messages.
 
-## The three gates
+## The four gates
 
 **1. `.gitignore`, written before `git init`.** Excludes `private/`, `inbox/`,
 `.tmp/`, the source folders, `*.pdf`, `*.xlsx`, `.env*` and `rclone.conf`.
@@ -25,7 +25,15 @@ Three match modes, because one does not fit:
 | `word` | case-insensitive whole word |
 | `cs` | case-sensitive whole word — acronyms that collide with code |
 
-**3. Policy backstop.** `git add -f` bypasses `.gitignore`, so the hook also
+**3. Commit identity.** The same `pre-commit` hook refuses any commit whose
+author email is not this repo's. A repo-local `user.email` silently overrode
+the correct global one and 29 commits were authored and pushed under the wrong
+address before anyone noticed — GitHub attributes a commit by its author
+email, so the history showed a contributor who had never been invited. Fixing
+it meant rewriting every commit and force-pushing. Set
+`ARCHIVE_ALLOWED_EMAIL` to commit under a different identity deliberately.
+
+**4. Policy backstop.** `git add -f` bypasses `.gitignore`, so the hook also
 rejects source-material file extensions and blobs over 5 MB regardless of
 ignore rules. This was found by red-teaming the gate, not by reasoning about
 it — a 21 MB PDF staged cleanly before it existed.
