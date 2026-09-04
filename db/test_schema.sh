@@ -69,9 +69,21 @@ READER=22222222-2222-2222-2222-222222222222
 GONE=33333333-3333-3333-3333-333333333333
 
 echo "structure"
-check "views exist"     "$(psql "$DB" -t -A -c "select count(*) from information_schema.views where table_schema='public'")" 4
-check "views invoker"   "$(psql "$DB" -t -A -c "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='v' and 'security_invoker=true'=any(c.reloptions)")" 4
-check "rls enabled"     "$(psql "$DB" -t -A -c "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relrowsecurity")" 41
+# Counted relatively, not against a hardcoded number: a hardcoded count goes
+# stale on the next schema change and gets bumped rather than investigated.
+# The property that matters is that NOTHING is left out.
+#
+# A view without security_invoker bypasses RLS entirely and serves every row
+# to anonymous callers. That happened here; this is what catches it.
+check "views all invoker" \
+  "$(psql "$DB" -t -A -c "select count(*) from information_schema.views v where v.table_schema='public' and not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='v' and c.relname=v.table_name and 'security_invoker=true'=any(c.reloptions))")" 0
+
+
+# Every table holding corpus-derived content must have RLS. The exemptions are
+# generic reference data seeded from public standards, not from the corpus --
+# list them explicitly so adding a table without a policy fails loudly.
+check "rls on content tables" \
+  "$(psql "$DB" -t -A -c "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and not c.relrowsecurity and c.relname not in ('stage_crosswalk','rating_level_crosswalk')")" 0
 
 echo "access"
 check "anon base table"   "$(q 'select count(*) from benchmark;')" 0

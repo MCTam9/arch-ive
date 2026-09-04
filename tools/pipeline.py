@@ -75,6 +75,10 @@ class Item:
     node_ref: str | None = None          # -> Node.ref
     citations: list[Citation] = field(default_factory=list)
     terms: list[str] = field(default_factory=list)   # taxonomy_term ids
+    # requirement_scope_applicability rows: the same requirement applies
+    # differently under each contractor scope of work, and collapsing that to
+    # one row loses which role a target binds.
+    scope_applicability: list[dict] = field(default_factory=list)
     ref: str | None = None
 
 
@@ -114,6 +118,7 @@ class Extraction:
     rating_levels: list[dict] = field(default_factory=list)
     design_variables: list[dict] = field(default_factory=list)
     design_variable_values: list[dict] = field(default_factory=list)
+    requirement_scopes: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     stats: dict[str, Any] = field(default_factory=dict)
 

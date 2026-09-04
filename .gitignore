@@ -42,3 +42,9 @@ dist/
 ._*
 .Spotlight-V100
 .Trashes
+
+# ─── web/ (Next.js UI) ───────────────────────────────────────────────────
+web/node_modules/
+web/.next/
+web/.env*
+!web/.env.example

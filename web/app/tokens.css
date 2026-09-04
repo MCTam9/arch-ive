@@ -1,0 +1,157 @@
+/*
+  arch-ive design tokens — 1-bit letterpress
+  ------------------------------------------
+  One saturated accent on a long neutral ramp. Square corners. Hard offset
+  shadows instead of soft ones. Bitmap type for chrome only, never for data —
+  see globals.css for the rule enforced in code (.font-mono / .font-display).
+
+  Semantic tokens (--bg, --text, --border, ...) are redefined per theme below;
+  everything else is theme-invariant. Never reach for --n900 etc. directly in
+  a component — use the semantic layer so theming stays centralised here.
+*/
+
+:root {
+  /* ---- raw ramp (verbatim spec values; theme-invariant) ---- */
+  --blue: #004aff;
+  --n900: #171818;
+  --n800: #30353e;
+  --n700: #404450;
+  --n600: #545863;
+  --n500: #8c909d;
+  --n400: #d0d3da;
+  --n300: #e1e2e9;
+  --n200: #f0f1f6;
+  --n100: #f8f8fa;
+
+  /* ---- performance-band colours, straight off the source sheets ---- */
+  --level-1: var(--n400);
+  --level-2: #c86a1e;
+  --level-3: #2e7d4f;
+  --level-4: var(--blue);
+  --level-1-text: var(--n900);
+  --level-2-text: var(--n100);
+  --level-3-text: var(--n100);
+  --level-4-text: var(--n100);
+
+  /* ---- type scale (verbatim spec values) ---- */
+  --fs-micro: 10px; /* below the 12px bitmap floor: mono/body only, never bitmap */
+  --fs-label: 12px; /* bitmap floor */
+  --fs-sm: 14px;
+  --fs-body: 16px;
+  --fs-h1: clamp(32px, 3.6vw, 52px);
+  --fs-h2: clamp(22px, 2.4vw, 32px);
+  --fs-h3: 18px;
+  --fs-mono-lg: 20px; /* large data readouts, e.g. a benchmark value on its own line */
+
+  --lh-tight: 1.1;
+  --lh-body: 1.5;
+  --lh-mono: 1.3;
+
+  /* ---- font stacks — declare real fallbacks, always ---- */
+  --font-display: 'Jacquard 12', 'Pixelify Sans', ui-monospace, monospace;
+  --font-mono: 'Departure Mono', 'Silkscreen', 'VT323', ui-monospace, 'SFMono-Regular',
+    Menlo, Consolas, monospace;
+  --font-body: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    sans-serif;
+
+  /* ---- spacing — 4px grid ---- */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+  --s-12: 48px;
+  --s-16: 64px;
+  --s-20: 80px;
+
+  /* ---- structure ---- */
+  --radius: 0px;
+  --border-width: 1px;
+  --border-width-strong: 2px;
+  --shadow-offset: 4px;
+  --shadow-hard: var(--shadow-offset) var(--shadow-offset) 0 0 var(--shadow-color);
+  --shadow-color: var(--n900);
+
+  /* ---- motion — hover/state only, never scroll-driven ---- */
+  --motion-fast: 120ms;
+  --motion-ease: ease-out;
+
+  /* ---- texture ---- */
+  --grain-opacity: 0.03;
+
+  /* ---- theme semantics: light (default) ---- */
+  --bg: var(--n100);
+  --surface: #ffffff;
+  --surface-sunken: var(--n200);
+  --text: var(--n900);
+  --text-muted: var(--n600);
+  --text-on-accent: var(--n100);
+  --border: var(--n400);
+  --border-strong: var(--n900);
+  --accent: var(--blue);
+  --accent-text: var(--n100);
+  --focus-ring: var(--blue);
+  --hatch-line: var(--n400);
+  --shadow-color: var(--n900);
+}
+
+/* explicit theme attribute wins in either direction */
+:root[data-theme='dark'],
+[data-theme='dark'] {
+  --bg: var(--n900);
+  --surface: var(--n800);
+  --surface-sunken: var(--n700);
+  --text: var(--n100);
+  --text-muted: var(--n400);
+  --text-on-accent: var(--n100);
+  --border: var(--n700);
+  --border-strong: var(--n200);
+  --accent: #5b8cff; /* lifted for AA against n900 */
+  --accent-text: var(--n900);
+  --focus-ring: #5b8cff;
+  --hatch-line: var(--n700);
+  --shadow-color: var(--n100);
+}
+
+:root:not([data-theme='light']) {
+  @media (prefers-color-scheme: dark) {
+    --bg: var(--n900);
+    --surface: var(--n800);
+    --surface-sunken: var(--n700);
+    --text: var(--n100);
+    --text-muted: var(--n400);
+    --text-on-accent: var(--n100);
+    --border: var(--n700);
+    --border-strong: var(--n200);
+    --accent: #5b8cff;
+    --accent-text: var(--n900);
+    --focus-ring: #5b8cff;
+    --hatch-line: var(--n700);
+    --shadow-color: var(--n100);
+  }
+}
+
+[data-theme='light'] {
+  --bg: var(--n100);
+  --surface: #ffffff;
+  --surface-sunken: var(--n200);
+  --text: var(--n900);
+  --text-muted: var(--n600);
+  --text-on-accent: var(--n100);
+  --border: var(--n400);
+  --border-strong: var(--n900);
+  --accent: var(--blue);
+  --accent-text: var(--n100);
+  --focus-ring: var(--blue);
+  --hatch-line: var(--n400);
+  --shadow-color: var(--n900);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+  }
+}

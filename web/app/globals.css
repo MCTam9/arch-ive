@@ -1,0 +1,213 @@
+@import "tailwindcss";
+@import "./tokens.css";
+
+/*
+  Font variables come from next/font/google (see app/fonts.ts), applied as
+  classes on <html> in app/layout.tsx. Override the literal-name fallbacks in
+  tokens.css with the actual loaded stacks here — same selector specificity,
+  later in the cascade, so this wins.
+*/
+:root {
+  --font-display: var(--font-jacquard-12), var(--font-pixelify-sans), ui-monospace,
+    monospace;
+  --font-mono: 'Departure Mono', var(--font-silkscreen), var(--font-vt323),
+    ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --font-body: var(--font-geist), ui-sans-serif, system-ui, -apple-system,
+    'Segoe UI', Roboto, sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+img,
+svg {
+  max-width: 100%;
+  display: block;
+}
+
+a {
+  color: inherit;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ── Rule 1: bitmap type for chrome only, never for data ──────────────────
+   .font-display is for headings, nav, section numbers, facet labels, empty
+   states. It has a hard 12px floor (--fs-label) — bitmap faces fail contrast
+   and legibility below that, so nothing sets it smaller. */
+.font-display {
+  font-family: var(--font-display);
+  font-size: max(var(--fs-label), 1em);
+  line-height: var(--lh-tight);
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+
+/* .font-mono is for every number, unit, code and cell value: benchmarks,
+   targets, page refs, ids. Never uppercased — case carries meaning in units
+   ('l/p/day' vs 'L/P/DAY' would misread). */
+.font-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+.font-body {
+  font-family: var(--font-body);
+}
+
+/* ── Rule 2: hover/state transitions only, ≤120ms, honour reduced motion ── */
+.transition-fast {
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--motion-ease);
+  transition-property: background-color, border-color, color, box-shadow, opacity;
+}
+
+/* ── hard offset shadow, the letterpress signature ─────────────────────── */
+.shadow-hard {
+  box-shadow: var(--shadow-hard);
+}
+
+/* ── Rule 4: provenance is visible ──────────────────────────────────────
+   Applied by <DraftWrapper> (components/draft-wrapper.tsx) around any block
+   whose content_status is wip / lorem / draft / template. The diagonal hatch
+   plus a bitmap stamp makes placeholder content structurally impossible to
+   mistake for guidance, even at a glance. */
+.status-hatch {
+  position: relative;
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--hatch-line) 0,
+    var(--hatch-line) 1px,
+    transparent 1px,
+    transparent 9px
+  );
+  background-color: var(--surface-sunken);
+  border: var(--border-width-strong) dashed var(--border-strong);
+}
+
+.status-stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: var(--s-1) var(--s-2);
+  background: var(--n900);
+  color: var(--n100);
+  border: var(--border-width) solid var(--n900);
+  transform: rotate(-2deg);
+}
+
+[data-theme='dark'] .status-stamp {
+  background: var(--n100);
+  color: var(--n900);
+  border-color: var(--n100);
+}
+
+/* ── grain texture — see components/grain.tsx ──────────────────────────
+   ~3% opacity, never rendered over a page-scan image (there is no page-image
+   view in this build; the review view is a TODO — see app/review-todo.md
+   equivalent note in app/item/[id]/page.tsx). Static feTurbulence SVG, tuned
+   to ~5-6% source opacity and then capped by --grain-opacity on the layer. */
+.grain-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: var(--grain-opacity);
+  image-rendering: pixelated;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 128px 128px;
+}
+.grain-layer.on-dark {
+  mix-blend-mode: overlay;
+}
+.grain-layer.on-light {
+  mix-blend-mode: multiply;
+}
+
+/* ── level bands — echo the source sheet's own colour coding ───────────── */
+.level-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--s-6);
+  padding: var(--s-1) var(--s-2);
+  border: var(--border-width) solid var(--border-strong);
+  font-weight: 700;
+}
+.level-1 {
+  background: var(--level-1);
+  color: var(--level-1-text);
+}
+.level-2 {
+  background: var(--level-2);
+  color: var(--level-2-text);
+}
+.level-3 {
+  background: var(--level-3);
+  color: var(--level-3-text);
+}
+.level-4 {
+  background: var(--level-4);
+  color: var(--level-4-text);
+}
+
+.card {
+  background: var(--surface);
+  border: var(--border-width) solid var(--border);
+}
+
+.text-muted {
+  color: var(--text-muted);
+}
+
+.surface-sunken {
+  background: var(--surface-sunken);
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--accent);
+  color: var(--accent-text);
+  padding: var(--s-2) var(--s-3);
+  z-index: 100;
+}
+.skip-link:focus {
+  left: var(--s-2);
+  top: var(--s-2);
+}

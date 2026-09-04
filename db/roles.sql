@@ -47,3 +47,45 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO arch_read;
 -- db/schema.sql) still applies to arch_read as a non-owner role regardless,
 -- so this is defence in depth, not the only thing standing between arch_read
 -- and a write.
+
+
+-- ── arch_auth: the sign-in lookup role ───────────────────────────────────
+--
+-- allowed_account's policy is `USING (id = current_account_id())` -- you can
+-- only ever see your own row. Correct for normal operation, but it makes the
+-- *first* lookup impossible for the app role: matching an OAuth email to an
+-- account id would require already knowing the id.
+--
+-- The obvious workaround is to do that one query as a superuser. Don't. The
+-- web app is the most exposed surface in this system, and a superuser DSN
+-- sitting in its environment means any compromise of it -- SSRF, an injected
+-- query, a leaked .env -- hands over write access to the entire corpus and
+-- defeats every RLS control in db/schema.sql. The privilege needed is one
+-- SELECT on one table.
+--
+-- So: a role that can read the allowlist and touch a timestamp, and nothing
+-- else. No SELECT on any other table, no BYPASSRLS, not a superuser.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'arch_auth') THEN
+    CREATE ROLE arch_auth LOGIN PASSWORD 'dev' NOINHERIT;
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  EXECUTE format('GRANT CONNECT ON DATABASE %I TO arch_auth', current_database());
+END $$;
+
+GRANT USAGE ON SCHEMA public TO arch_auth;
+GRANT SELECT ON allowed_account TO arch_auth;
+GRANT UPDATE (last_seen_at) ON allowed_account TO arch_auth;
+
+-- RLS is ENABLE (not FORCE) on allowed_account, so a non-owner role still
+-- needs a policy of its own. Scoped TO arch_auth so it cannot widen what any
+-- other role sees.
+DROP POLICY IF EXISTS allowed_account_auth_lookup ON allowed_account;
+CREATE POLICY allowed_account_auth_lookup ON allowed_account
+  FOR SELECT TO arch_auth USING (true);
+
+DROP POLICY IF EXISTS allowed_account_auth_touch ON allowed_account;
+CREATE POLICY allowed_account_auth_touch ON allowed_account
+  FOR UPDATE TO arch_auth USING (true) WITH CHECK (true);
