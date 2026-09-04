@@ -138,10 +138,19 @@ jobs:
           GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO arch_app;
           SQL
           psql "$TEST_ADMIN" -v ON_ERROR_STOP=1 -q -f db/roles.sql
+          # db/roles.sql carries no PASSWORD clause on purpose -- it used to
+          # reset arch_read's password to a known value on every run, which a
+          # managed Postgres rejects and a real deployment would have silently
+          # downgraded. So the password is set here, per-environment.
+          psql "$TEST_ADMIN" -v ON_ERROR_STOP=1 -q -c "ALTER ROLE arch_read PASSWORD 'test'"
 
       - name: pytest
         env:
           TEST_DATABASE_URL: postgresql://arch_app:test@localhost:5432/arch_test
+          # tests/test_mcp_server.py connects as arch_read, not arch_app --
+          # the MCP server exists to prove a read-only role sees the right
+          # rows, so it cannot share the app connection.
+          TEST_DATABASE_URL_READONLY: postgresql://arch_read:test@localhost:5432/arch_test
         # -ra prints the skip reasons, so a corpus test quietly turning into a
         # no-op is visible in the log rather than counted as a pass.
         run: pytest -ra -q

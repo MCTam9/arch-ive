@@ -26,5 +26,15 @@ TEST_DSN = os.environ.get(
     "TEST_DATABASE_URL", "postgresql://arch_app:dev@localhost:55432/arch_test"
 )
 
+# The MCP server connects as arch_read, not arch_app -- it exists to prove a
+# read-only role sees the right rows, so it cannot share the app connection and
+# reads its own variable. That variable belongs here for the same reason
+# DATABASE_URL does: set anywhere else, a test run can end up pointed at the
+# database holding the real corpus.
+TEST_DSN_READONLY = os.environ.get(
+    "TEST_DATABASE_URL_READONLY", "postgresql://arch_read:dev@localhost:55432/arch_test"
+)
+
 os.environ["DATABASE_URL"] = TEST_DSN
+os.environ["DATABASE_URL_READONLY"] = TEST_DSN_READONLY
 os.environ.setdefault("ARCHIVE_ACCOUNT_ID", "00000000-0000-0000-0000-0000000000aa")

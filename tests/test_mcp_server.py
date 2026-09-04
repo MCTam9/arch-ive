@@ -17,15 +17,14 @@ Run in isolation -- other agents' fixtures share this database:
 from __future__ import annotations
 
 import hashlib
-import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-os.environ.setdefault(
-    "DATABASE_URL_READONLY", "postgresql://arch_read:dev@localhost:55432/arch_test"
-)
+# DATABASE_URL_READONLY is set by tests/conftest.py, which is the one place
+# every test DSN is decided. It used to be defaulted here instead, which meant
+# CI -- where the database is on a different port -- ran these against nothing.
 
 import psycopg
 import pytest
