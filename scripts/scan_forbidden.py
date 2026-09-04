@@ -66,7 +66,10 @@ class Rule:
 def load_rules() -> list[Rule]:
     """Read rules from $SCAN_DENYLIST (path or literal) or the default path."""
     raw = os.environ.get("SCAN_DENYLIST", "")
-    if raw and not Path(raw).exists() and ("\n" in raw or "\t" in raw):
+    # Order matters: test for the literal list FIRST. A multi-line secret is
+    # longer than any filesystem allows, and Path.exists() raises OSError
+    # rather than returning False -- which crashed every CI run of this gate.
+    if raw and ("\n" in raw or "\t" in raw):
         text = raw                      # CI passes the list itself via a secret
     else:
         path = Path(raw) if raw else DEFAULT_DENYLIST
