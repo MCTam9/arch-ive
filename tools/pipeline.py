@@ -158,14 +158,21 @@ def for_doc_kind(doc_kind: str) -> Extractor:
 
 
 def load_extractors() -> None:
-    """Import every module in extractors/ so its @register call runs."""
+    """Import every module in extractors/ so its @register call runs.
+
+    The fallback goes first, deliberately. It claims several doc_kinds so that
+    an unrecognised document is still ingested, but a specific extractor must
+    win wherever one exists -- and with plain alphabetical import order it
+    would not (generic sorts after deck, and silently replaced it).
+    """
     import importlib
     import pkgutil
 
     import extractors
 
-    for mod in pkgutil.iter_modules(extractors.__path__):
-        importlib.import_module(f"extractors.{mod.name}")
+    names = [m.name for m in pkgutil.iter_modules(extractors.__path__)]
+    for name in sorted(names, key=lambda n: (n != "generic", n)):
+        importlib.import_module(f"extractors.{name}")
 
 
 # ── stage runner ─────────────────────────────────────────────────────────

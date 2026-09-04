@@ -237,7 +237,10 @@ CREATE TABLE criterion (
   path          ltree
 );
 CREATE INDEX ON criterion USING gist (path);
-CREATE INDEX ON criterion (framework_id, code);
+-- unique, not merely indexed: a code identifies one criterion within a
+-- framework, and the writer needs a conflict target to upsert against.
+CREATE UNIQUE INDEX criterion_framework_code ON criterion (framework_id, code)
+  WHERE code IS NOT NULL;
 
 -- ── units and metrics ────────────────────────────────────────────────────
 

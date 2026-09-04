@@ -42,16 +42,35 @@ GROUND_TRUTH = [
      """SELECT value_numeric FROM v_benchmark
         WHERE metric_id = 'upfront_embodied_carbon' AND target_year = 2030
           AND building_use_id LIKE '%hotel%' LIMIT 1""", 500),
+    # 39 is the 2030 target; 35 is 2050. An earlier hand-read of the unordered
+    # text layer transposed them -- the coordinate-aligned table is the truth.
     ("eui 2030, flats",
      """SELECT value_numeric FROM v_benchmark
         WHERE metric_id = 'eui' AND target_year = 2030
+          AND building_use_id LIKE '%flat%' LIMIT 1""", 39),
+    ("eui 2050, flats",
+     """SELECT value_numeric FROM v_benchmark
+        WHERE metric_id = 'eui' AND target_year = 2050
           AND building_use_id LIKE '%flat%' LIMIT 1""", 35),
+    ("eui 2030, general offices",
+     """SELECT value_numeric FROM v_benchmark
+        WHERE metric_id = 'eui' AND target_year = 2030
+          AND building_use_id LIKE '%general_office%' LIMIT 1""", 72),
 ]
 
 INTEGRITY = [
-    ("every item has a citation",
+    # A spreadsheet has no page to cite -- its provenance is a sheet and cell
+    # reference, not a page image. Only paged documents owe a citation.
+    ("every item from a paged document is cited",
      """SELECT count(*) FROM knowledge_item ki
-        WHERE NOT EXISTS (SELECT 1 FROM citation c WHERE c.knowledge_item_id = ki.id)""", 0),
+        JOIN source_document d ON d.id = ki.document_id
+        WHERE coalesce(d.page_count, 0) > 0
+          AND NOT EXISTS (SELECT 1 FROM citation c WHERE c.knowledge_item_id = ki.id)""", 0),
+    # A handful legitimately have none: constants written inline inside a
+    # formula (the hours-per-month figure, for one) have no cell of their own.
+    ("template parameters without a cell stay rare",
+     """SELECT (count(*) FILTER (WHERE cell_ref IS NULL)) * 10 <= count(*)
+        FROM template_parameter""", True),
     ("no item sourced from a placeholder page",
      """SELECT count(*) FROM knowledge_item ki
         JOIN citation c ON c.knowledge_item_id = ki.id
