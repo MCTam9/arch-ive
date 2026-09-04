@@ -47,14 +47,21 @@ export default async function LoginPage({
           <p
             className="font-mono"
             style={{
-              background: "var(--n200)",
-              border: "var(--border-width) solid var(--n900)",
+              // Semantic tokens, not raw ramp values. This block used to set
+              // background: var(--n200) with no colour of its own, so it
+              // inherited --text -- near-white in dark mode, on a near-white
+              // fixed background. The one message a user sees when they
+              // cannot get in was invisible to half of them.
+              background: "var(--surface-sunken)",
+              color: "var(--text)",
+              border: "var(--border-width) solid var(--border-strong)",
               padding: "var(--s-2)",
               marginBottom: "var(--s-4)",
               fontSize: "var(--fs-sm)",
             }}
           >
-            Sign-in failed: no active allowlist entry for that account.
+            That Google account is not on the allowlist. Check which account you
+            signed in with — the allowlist matches on email address.
           </p>
         )}
 
