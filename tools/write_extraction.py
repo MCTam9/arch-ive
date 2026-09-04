@@ -821,10 +821,17 @@ def write_extraction(conn: psycopg.Connection, document_id: str, extraction: Ext
         "warnings": warnings,
     }
 
+    # Warnings are the review queue's raw material -- an extractor saying
+    # "these two copies disagree" or "I skipped 32 WIP pages" is the most
+    # valuable thing it produces. Persist them rather than dropping them on
+    # the floor; truncate only so one pathological run cannot bloat the row.
     import json
+    persisted = {k: v for k, v in counts.items() if k != "warnings"}
+    persisted["warning_count"] = len(warnings)
+    persisted["warnings"] = warnings[:200]
     conn.execute(
         "UPDATE extraction_run SET finished_at = now(), stats = %s WHERE id = %s",
-        (json.dumps({k: v for k, v in counts.items() if k != "warnings"}), extraction_run_id),
+        (json.dumps(persisted), extraction_run_id),
     )
 
     return counts
