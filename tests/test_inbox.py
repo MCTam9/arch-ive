@@ -99,6 +99,13 @@ def fake_stage_modules(monkeypatch):
     write_extraction.write_extraction = lambda conn, document_id, extraction: {"items": 0}
     embed_chunks = types.ModuleType("tools.embed_chunks")
     embed_chunks.embed_pending = lambda conn, document_id=None: 0
+    # The embed stage does `from tools.embed_chunks import embed_pending,
+    # model_available`, and a stub missing either name raises ImportError --
+    # which the runner records as a stage failure, so the job stops at
+    # 'extracted' and the crash-resume assertion fails a long way from the
+    # cause. A stub has to carry the whole imported surface, not just the
+    # function the test cares about.
+    embed_chunks.model_available = lambda: True
 
     for name, mod in {
         "tools.build_structure": build_structure,

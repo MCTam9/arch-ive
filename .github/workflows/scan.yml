@@ -66,3 +66,82 @@ jobs:
 
       - name: Scan for secrets
         run: gitleaks detect --source . --redact --no-banner --verbose
+
+  # ── the test suite ───────────────────────────────────────────────────────
+  #
+  # 79 tests passed locally and none of them ran here, which meant the only
+  # enforced gate on a push was the leak scan. Everything the extractors do
+  # was on the honour system.
+  #
+  # Two things make this runnable in public CI at all:
+  #   * the corpus tests already self-skip -- Excel/, PDF/, "Report -
+  #     Guidance/" and "Table - PDF/" are gitignored, so CORPUS_PRESENT is
+  #     false here and those tests report skipped rather than failing. What
+  #     remains is every synthetic-fixture and database test.
+  #   * tools/embed_chunks.py imports sentence-transformers lazily and
+  #     tests/test_inbox.py stubs the module outright, so CI can skip a ~2 GB
+  #     torch install without losing coverage.
+  tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # Same image db/test_schema.sh uses locally: Postgres 17 with pgvector
+        # already built in. ltree ships with contrib in the same image.
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGPASSWORD: test
+      ADMIN_URL: postgresql://postgres:test@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          # sentence-transformers is the one line dropped: it pulls torch and
+          # every code path that needs a model is either lazy or stubbed.
+          grep -v '^sentence-transformers' requirements.txt > /tmp/requirements-ci.txt
+          python -m pip install --upgrade pip
+          pip install -r /tmp/requirements-ci.txt pytest
+
+      - name: Schema and access-control assertions
+        # Applies db/schema.sql to the `postgres` database and asserts the RLS
+        # and security_invoker properties hold. Creates the arch_app role with
+        # password 'test', which the pytest DSN below then reuses.
+        run: |
+          PORT=5432 DB="$ADMIN_URL" ./db/test_schema.sh --existing
+
+      - name: Provision the test database
+        run: |
+          psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE arch_test'
+          TEST_ADMIN="postgresql://postgres:test@localhost:5432/arch_test"
+          psql "$TEST_ADMIN" -v ON_ERROR_STOP=1 -q \
+            -f db/schema.sql -f db/seed.sql -f db/seed_synonyms.sql \
+            -f db/test_account.sql
+          # Roles are cluster-wide but grants are per-database, so arch_app
+          # needs granting again here even though test_schema.sh created it.
+          psql "$TEST_ADMIN" -v ON_ERROR_STOP=1 -q <<'SQL'
+          GRANT USAGE ON SCHEMA public TO arch_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO arch_app;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO arch_app;
+          SQL
+          psql "$TEST_ADMIN" -v ON_ERROR_STOP=1 -q -f db/roles.sql
+
+      - name: pytest
+        env:
+          TEST_DATABASE_URL: postgresql://arch_app:test@localhost:5432/arch_test
+        # -ra prints the skip reasons, so a corpus test quietly turning into a
+        # no-op is visible in the log rather than counted as a pass.
+        run: pytest -ra -q

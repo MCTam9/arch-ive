@@ -49,6 +49,34 @@ Do not add a term to the denylist to get past a block — the denylist is the
 policy, not the obstacle. If a term genuinely collides with legitimate code
 (an acronym that is also a variable name), switch that rule to `cs` mode.
 
+## What CI runs (`.github/workflows/scan.yml`)
+
+Three jobs on every push and PR:
+
+| Job | What it proves |
+|---|---|
+| `forbidden-terms` | no denylisted term in any tracked file, or anywhere in history |
+| `secrets` | gitleaks over the whole repo |
+| `tests` | `db/test_schema.sh` plus the pytest suite |
+
+The `tests` job took some setting up and the details are load-bearing:
+
+- **The corpus tests self-skip.** `Excel/`, `PDF/`, `Report - Guidance/` and
+  `Table - PDF/` are gitignored, so `CORPUS_PRESENT` is false on a CI checkout
+  and ~25 tests report skipped. That is the point — a public runner must never
+  have the material — but it means CI covers the synthetic-fixture and
+  database tests only. `pytest -ra` prints the skip reasons so a test quietly
+  becoming a no-op is visible rather than counted as a pass.
+- **`sentence-transformers` is dropped** from the CI install: it pulls torch,
+  `tools/embed_chunks.py` imports it lazily, and `tests/test_inbox.py` stubs
+  the module outright.
+- **`db/test_account.sql` is not optional.** RLS is FORCEd and the policies
+  call `has_access()`, so with no matching `allowed_account` row every write
+  test fails with *"new row violates row-level security policy"* — which reads
+  like a missing GRANT and is not one. This step was missing from the setup
+  documented in `tests/conftest.py`, which is precisely how CI first came up
+  red against a database that looked correctly provisioned.
+
 ## Edge cases
 
 - **Fork PRs get a weaker scan.** Actions secrets are unavailable to forks.

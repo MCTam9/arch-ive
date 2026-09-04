@@ -12,20 +12,27 @@
 
 /* Argent Pixel CF — the display face. Self-hosted rather than loaded from a
    font CDN because it is a commercial licence, and deliberately NOT committed
-   (see .gitignore): drop the .otf files into web/public/fonts/ and it appears.
-   A clone without them falls through to Jacquard 12, which is loaded from
-   Google Fonts and keeps the page rendering rather than swapping in a system
-   serif that would break the 1-bit look entirely. */
+   (see .gitignore): drop the .otf files into web/public/fonts/, run
+   `web/scripts/build_fonts.py`, and it appears. A clone without them falls
+   through to Jacquard 12, which is loaded from Google Fonts and keeps the page
+   rendering rather than swapping in a system serif that would break the 1-bit
+   look entirely.
+
+   WOFF2 only, and the .otf is kept out of the deployment by web/.vercelignore.
+   The OTF was previously served straight from /public, which meant the
+   installable desktop binary of a commercial face was a public unauthenticated
+   download from the deploy -- a different thing from serving a webfont, under
+   most foundry licences. WOFF2 is also a third of the bytes. */
 @font-face {
   font-family: 'Argent Pixel CF';
-  src: url('/fonts/ArgentPixelCF-Regular.otf') format('opentype');
+  src: url('/fonts/ArgentPixelCF-Regular.woff2') format('woff2');
   font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: 'Argent Pixel CF';
-  src: url('/fonts/ArgentPixelCF-Italic.otf') format('opentype');
+  src: url('/fonts/ArgentPixelCF-Italic.woff2') format('woff2');
   font-weight: 400;
   font-style: italic;
   font-display: swap;

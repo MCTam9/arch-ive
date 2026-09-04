@@ -7,10 +7,15 @@ not a backup.
 ## Inputs
 
 - `private/rclone.conf` — the R2 remote plus the `crypt` wrapper. Gitignored.
-- `private/rclone-passwords.txt` — the plaintext crypt passwords. **These
-  belong in a password manager.** Lose them and the archive is permanently
-  unreadable; that is what client-side encryption means.
-- `.env` — `SOURCE_DIR`, `RCLONE_CONFIG`, `RCLONE_REMOTE`.
+  It holds the crypt passwords in rclone's obscured form, which is reversible
+  and therefore **not** encryption: treat the file as the key material it is.
+  The plaintext passwords belong in a password manager and nowhere on disk —
+  lose them and the archive is permanently unreadable, which is what
+  client-side encryption means.
+- `.env` — `SOURCE_DIR`, `RCLONE_CONFIG`, `RCLONE_REMOTE`. These were missing
+  for a while and both `archive_original` and `fetch_original` degrade quietly
+  to local-only when they are unset, so check them before concluding that
+  something did not reach R2.
 
 ## Archiving
 
@@ -26,6 +31,27 @@ Documents ingested before R2 existed have no offsite copy. Fill that gap with:
 ```
 
 Idempotent: anything already carrying an `r2_key` is skipped.
+
+## Getting one document back
+
+```sh
+./.venv/bin/python -m tools.fetch_original <slug> [--out DIR] [--remote-only]
+```
+
+Tries `SOURCE_DIR` first (no key, no network), falls back to the crypt remote,
+and verifies SHA-256 against the database either way — a restore that is not
+hash-checked is a guess. `--remote-only` skips the local copy, which is the
+only variant that actually exercises the archive; the default will happily
+succeed forever while R2 is broken. Every run writes an `audit_log` row.
+
+**Why this is a CLI tool and not a route in the web app.** Decrypting a crypt
+object needs the crypt password, so a download route would put that password
+in the Vercel environment — the most exposed surface in the system — and the
+archive's headline property is that the key does not live next to the data. The
+app serves page renders and extracted knowledge; whole originals come back
+through this tool, run by someone who already holds the config. Reversing that
+decision means accepting that a compromise of the web app yields the plaintext
+corpus.
 
 ## The restore drill — run it, do not assume it
 

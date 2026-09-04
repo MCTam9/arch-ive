@@ -1,0 +1,7 @@
+# Anything in public/ is served unauthenticated from the deployment. The
+# display face is a commercial licence, so only the WOFF2 webfont ships --
+# the .otf is the installable desktop binary and has no business being a
+# public download. Converted by web/scripts/build_fonts.py; see the @font-face
+# block in app/tokens.css.
+public/fonts/*.otf
+public/fonts/*.ttf
