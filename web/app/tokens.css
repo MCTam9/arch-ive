@@ -44,6 +44,11 @@
   --mint-pale: #baf2e3;
   --mint: #7fd8be;
   --mint-deep: #327b66;
+  /* Card tints. The neutral ramp carries the mint hue but at 95%+ lightness
+     there is no room left for it to show -- n200 reads as white. These sit
+     lower and more saturated so a record actually looks tinted. */
+  --mint-tint: #e7f9f4;
+  --mint-tint-deep: #d6f5ec;
 
   /* ---- neutral ramp: same lightness at every step, re-pointed to the
      accent's hue so the greys read as chosen rather than inherited ---- */
@@ -84,15 +89,9 @@
   --level-4-surface: #cee8f6;
 
   /* ---- chrome: the app's furniture, not its content ----
-     Theme-invariant on purpose. The filter rail is navigation, not a record,
-     and reading it as a dark band is what stops it being scanned as another
-     card of data. True black rather than --n900 so it stays a distinct
-     surface in dark mode, where the page ground is already near-black. ---- */
-  --chrome-bg: #000000;
-  --chrome-text: var(--n100);
-  --chrome-muted: var(--n400);
-  --chrome-surface: var(--n800);
-  --chrome-border: var(--n600);
+     Follows the theme -- white in light, the page ground in dark. The rail is
+     separated from the content by the content being tinted, not by the rail
+     being a slab of a different colour. Redefined per theme below. ---- */
 
   /* ---- type scale (verbatim spec values) ---- */
   --fs-micro: 10px; /* below the 12px bitmap floor: mono/body only, never bitmap */
@@ -155,9 +154,9 @@
   --grain-opacity: 0.03;
 
   /* ---- theme semantics: light (default) ---- */
-  --bg: var(--n100);
-  --surface: #ffffff;
-  --surface-sunken: var(--n200);
+  --bg: #ffffff;
+  --surface: var(--mint-tint);
+  --surface-sunken: var(--mint-tint-deep);
   --text: var(--n900);
   --text-muted: var(--n600);
   --text-on-accent: var(--n900);
@@ -170,6 +169,11 @@
   --focus-ring: var(--mint-deep);
   --hatch-line: var(--n400);
   --shadow-color: var(--n900);
+  --chrome-bg: #ffffff;
+  --chrome-text: var(--n900);
+  --chrome-muted: var(--n600);
+  --chrome-surface: #ffffff;
+  --chrome-border: var(--n400);
 }
 
 /* explicit theme attribute wins in either direction */
@@ -190,6 +194,11 @@
   --focus-ring: var(--mint);
   --hatch-line: var(--n700);
   --shadow-color: var(--n100);
+  --chrome-bg: var(--n900);
+  --chrome-text: var(--n100);
+  --chrome-muted: var(--n400);
+  --chrome-surface: var(--n800);
+  --chrome-border: var(--n700);
 }
 
 :root:not([data-theme='light']) {
@@ -209,13 +218,18 @@
     --focus-ring: var(--mint);
     --hatch-line: var(--n700);
     --shadow-color: var(--n100);
-  }
+    --chrome-bg: var(--n900);
+    --chrome-text: var(--n100);
+    --chrome-muted: var(--n400);
+    --chrome-surface: var(--n800);
+    --chrome-border: var(--n700);
+}
 }
 
 [data-theme='light'] {
-  --bg: var(--n100);
-  --surface: #ffffff;
-  --surface-sunken: var(--n200);
+  --bg: #ffffff;
+  --surface: var(--mint-tint);
+  --surface-sunken: var(--mint-tint-deep);
   --text: var(--n900);
   --text-muted: var(--n600);
   --text-on-accent: var(--n900);
@@ -228,6 +242,11 @@
   --focus-ring: var(--mint-deep);
   --hatch-line: var(--n400);
   --shadow-color: var(--n900);
+  --chrome-bg: #ffffff;
+  --chrome-text: var(--n900);
+  --chrome-muted: var(--n600);
+  --chrome-surface: #ffffff;
+  --chrome-border: var(--n400);
 }
 
 @media (prefers-reduced-motion: reduce) {
