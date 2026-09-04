@@ -10,6 +10,27 @@
   a component — use the semantic layer so theming stays centralised here.
 */
 
+/* Argent Pixel CF — the display face. Self-hosted rather than loaded from a
+   font CDN because it is a commercial licence, and deliberately NOT committed
+   (see .gitignore): drop the .otf files into web/public/fonts/ and it appears.
+   A clone without them falls through to Jacquard 12, which is loaded from
+   Google Fonts and keeps the page rendering rather than swapping in a system
+   serif that would break the 1-bit look entirely. */
+@font-face {
+  font-family: 'Argent Pixel CF';
+  src: url('/fonts/ArgentPixelCF-Regular.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Argent Pixel CF';
+  src: url('/fonts/ArgentPixelCF-Italic.otf') format('opentype');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
 :root {
   /* ---- raw ramp (verbatim spec values; theme-invariant) ---- */
   --blue: #004aff;
@@ -47,12 +68,18 @@
   --lh-body: 1.5;
   --lh-mono: 1.3;
 
-  /* ---- font stacks — declare real fallbacks, always ---- */
-  --font-display: 'Jacquard 12', 'Pixelify Sans', ui-monospace, monospace;
-  --font-mono: 'Departure Mono', 'Silkscreen', 'VT323', ui-monospace, 'SFMono-Regular',
-    Menlo, Consolas, monospace;
-  --font-body: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
-    sans-serif;
+  /* ---- font stacks — one definition, here, and nowhere else ----
+     Argent Pixel CF is the display face, self-hosted above. The
+     --font-* variables after it come from next/font/google (app/fonts.ts),
+     which mints a hashed family name per face: the literal 'Jacquard 12'
+     does NOT match what Next loads, so the variable is the only way to
+     reach it. Anything after that is a genuine system fallback. */
+  --font-display: 'Argent Pixel CF', var(--font-jacquard-12), var(--font-pixelify-sans),
+    ui-monospace, monospace;
+  --font-mono: 'Departure Mono', var(--font-silkscreen), var(--font-vt323),
+    ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --font-body: var(--font-geist), ui-sans-serif, system-ui, -apple-system,
+    'Segoe UI', Roboto, sans-serif;
 
   /* ---- spacing — 4px grid ---- */
   --s-1: 4px;

@@ -2,19 +2,11 @@
 @import "./tokens.css";
 
 /*
-  Font variables come from next/font/google (see app/fonts.ts), applied as
-  classes on <html> in app/layout.tsx. Override the literal-name fallbacks in
-  tokens.css with the actual loaded stacks here — same selector specificity,
-  later in the cascade, so this wins.
+  Font stacks live in tokens.css and are NOT redefined here. This file used to
+  restate all three at the same specificity, later in the cascade, which meant
+  tokens.css's definitions never applied -- and adding a face there silently
+  did nothing. One token, one definition.
 */
-:root {
-  --font-display: var(--font-jacquard-12), var(--font-pixelify-sans), ui-monospace,
-    monospace;
-  --font-mono: 'Departure Mono', var(--font-silkscreen), var(--font-vt323),
-    ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
-  --font-body: var(--font-geist), ui-sans-serif, system-ui, -apple-system,
-    'Segoe UI', Roboto, sans-serif;
-}
 
 *,
 *::before,

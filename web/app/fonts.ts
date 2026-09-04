@@ -1,9 +1,10 @@
-// Font loading, kept apart from tokens.css so the token file stays pure CSS
-// (inspectable on its own, e.g. by a static reader). All four families are
-// free/OFL and served from Google Fonts. Departure Mono is NOT on Google
-// Fonts — tokens.css lists it first in --font-mono as an honest fallback
-// name (a system that happens to have it locally will use it) with
-// Silkscreen/VT323 actually loaded as the bitmap-mono fallback per spec.
+// Font loading for the OFL families, kept apart from tokens.css so the token
+// file stays pure CSS. The display face is Argent Pixel CF, which is a
+// commercial licence and so is self-hosted via @font-face in tokens.css from
+// files that are never committed — Jacquard 12 below is what a clone without
+// them falls back to, not decoration. Departure Mono is likewise not on
+// Google Fonts; tokens.css names it first in --font-mono as an honest local
+// fallback, with Silkscreen/VT323 actually loaded behind it.
 import { Geist, Jacquard_12, Pixelify_Sans, Silkscreen, VT323 } from "next/font/google";
 
 export const jacquard12 = Jacquard_12({

@@ -48,3 +48,12 @@ web/node_modules/
 web/.next/
 web/.env*
 !web/.env.example
+
+# Argent Pixel CF is a commercial licence (Connary Fagen). The app loads it
+# from web/public/fonts/ when present and falls back to the OFL bitmap faces
+# when it isn't, so a public clone still renders -- but the binaries must
+# never be redistributed through this repo.
+web/public/fonts/*.otf
+web/public/fonts/*.ttf
+web/public/fonts/*.woff
+web/public/fonts/*.woff2
