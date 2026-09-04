@@ -45,14 +45,6 @@
   --mint: #7fd8be;
   --mint-deep: #327b66;
 
-  /* The four performance bands below are colour-coded in the SOURCE
-     documents, so a Level 3 cell reads the same on screen as on paper. They
-     are data encoding, not theme: level-4's blue stays blue even though the
-     accent no longer is, and it has to, because the alternative -- a mint
-     level-4 -- would sit right next to level-3's green and stop the two
-     bands being tellable apart. */
-  --source-blue: #004aff;
-
   /* ---- neutral ramp: same lightness at every step, re-pointed to the
      accent's hue so the greys read as chosen rather than inherited ---- */
   --n900: #171818;
@@ -65,17 +57,31 @@
   --n200: #f0f6f4;
   --n100: #f8faf9;
 
-  /* ---- performance-band colours, straight off the source sheets ---- */
-  --level-1: var(--n400);
-  --level-2: #c86a1e;
-  --level-3: #2e7d4f;
-  --level-4: var(--source-blue);
+  /* ---- performance bands: sampled from the source sheets, not matched by
+     eye. These are the header fills read out of the PDF vector layer and
+     confirmed against the rendered pixels; all six crib sheets use the same
+     four, including the one with different column geometry. They are data
+     encoding rather than theme -- a Level 3 cell has to read the same on
+     screen as on paper, which is what makes checking the extraction against
+     the original cheap.
+
+     The sheets set their own band labels in WHITE, which measures 1.4-2.2:1
+     and is illegible. Near-black is 7.7-12.1:1 on all four, so the fill is
+     reproduced and the label is not. ---- */
+  --level-1: #bfced1; /* pale blue-grey */
+  --level-2: #fdcd87; /* amber */
+  --level-3: #b7dd28; /* lime */
+  --level-4: #54b4e7; /* sky blue */
   --level-1-text: var(--n900);
-  /* near-black, not near-white: light text on this orange is 3.62:1 and
-     fails AA. It failed before the palette changed, too. */
   --level-2-text: var(--n900);
-  --level-3-text: var(--n100);
-  --level-4-text: var(--n100);
+  --level-3-text: var(--n900);
+  --level-4-text: var(--n900);
+
+  /* the body of each column is a pale wash of its band, also sampled */
+  --level-1-surface: #edf0f1;
+  --level-2-surface: #fdf0c9;
+  --level-3-surface: #eaf2c3;
+  --level-4-surface: #cee8f6;
 
   /* ---- type scale (verbatim spec values) ---- */
   --fs-micro: 10px; /* below the 12px bitmap floor: mono/body only, never bitmap */
