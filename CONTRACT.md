@@ -168,3 +168,67 @@ psql "$ADMIN_URL/arch_test" -f db/seed.sql     # needs SET app.account_id first
 This is not optional hygiene: test fixtures create and delete documents using
 the same slugs the corpus uses, so sharing one database means a test run
 silently deletes real rows. That happened twice before conftest.py existed.
+
+## MCP surface
+
+`tools/mcp_server.py` is a local stdio MCP server for Claude/agent retrieval.
+It connects as `arch_read` (see `db/roles.sql`) on `DATABASE_URL_READONLY`,
+never as `arch_app`, and never over a public endpoint. Every tool function
+also exists as a plain `(conn, ...)` function of the same name so it can be
+called directly in tests without going over the MCP protocol.
+
+Two rules apply across all of them: every result carries a document slug +
+page citation (a row with neither is dropped, not returned with a null
+citation), and `content_status` in `{lorem, template, wip, draft}` is
+excluded by default -- pass `include_placeholder=True` to see it anyway,
+always labelled `is_placeholder`/`is_placeholder_content` on the row.
+
+```python
+# tools/mcp_server.py
+def search_knowledge(conn, query: str, *, facets: dict[str, str] | None = None,
+                      limit: int = 20, include_placeholder: bool = False) -> dict:
+    """Hybrid full-text + vector search (delegates to tools.search.search
+    for the default, real-content-only path). Each result carries a
+    `citation` dict with document_slug + page_from/page_to."""
+
+def get_benchmark(conn, *, metric: str | None = None, building_use: str | None = None,
+                   target_year: int | None = None, limit: int = 50,
+                   include_placeholder: bool = False) -> dict:
+    """Rows from v_benchmark, each carrying document_slug + page_index."""
+
+def get_requirement_matrix(conn, *, topic: str | None = None, level: str | None = None,
+                            framework: str | None = None, limit: int = 50,
+                            include_placeholder: bool = False) -> dict:
+    """Rows from v_requirement_matrix. Selects a fixed column allowlist,
+    intersected at query time with information_schema -- a column this view
+    loses (it's under active change elsewhere) degrades the response instead
+    of raising, and is reported back under `missing_columns`."""
+
+def list_templates(conn, *, limit: int = 100, include_placeholder: bool = False) -> dict:
+    """Rows from v_template_catalogue. These are xlsx workbooks with no PDF
+    page to cite, so `citation` here is {document_slug, sheets: [...]} from
+    template_parameter instead of a page index."""
+
+def get_citation(conn, item_id: str) -> dict:
+    """Every citation row for one knowledge_item id: document slug, PDF
+    page_index, printed_page_label, bbox. Not filtered by content_status --
+    the caller already has a specific item_id in hand -- but every row is
+    labelled `is_placeholder`."""
+
+def get_document(conn, slug: str) -> dict:
+    """source_document metadata + its doc_node outline, plus a
+    content_status breakdown of the document's knowledge items (so, e.g., a
+    24%-lorem document shows that fraction rather than hiding it)."""
+```
+
+`db/roles.sql` creates `arch_read`: `LOGIN`, `NOINHERIT`, `CONNECT` on the
+database, `USAGE` on schema public, `SELECT` only (tables and views, via
+`ALTER DEFAULT PRIVILEGES` for future ones too) -- no write grants anywhere.
+RLS (`ENABLE`+`FORCE` in `db/schema.sql`) still applies to it like any
+non-owner role, so an unset `app.account_id` sees zero rows same as
+`arch_app` does. Apply it once per database (roles are cluster-wide, grants
+are not):
+```sh
+docker exec -e PGPASSWORD=dev archive-dev psql -U postgres -d postgres  -f db/roles.sql
+docker exec -e PGPASSWORD=dev archive-dev psql -U postgres -d arch_test -f db/roles.sql
+```
