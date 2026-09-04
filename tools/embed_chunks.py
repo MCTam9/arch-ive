@@ -29,6 +29,19 @@ def _load_model():
     return _model
 
 
+def model_available() -> bool:
+    """Whether the local model can actually be loaded.
+
+    Separate from embed_pending because a caller needs to tell "embedded
+    nothing because nothing was pending" apart from "embedded nothing because
+    the model is not installed". The stage runner records the first as ok and
+    the second as skipped; conflating them marks a corpus with zero embeddings
+    as successfully embedded, which is how you come to believe a knowledge
+    base has semantic search when it has none.
+    """
+    return _load_model() is not None
+
+
 def embed_pending(conn, document_id: str | None = None) -> int:
     """Embed chunks whose embedding IS NULL. Returns count embedded.
 

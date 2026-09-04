@@ -611,8 +611,12 @@ def _run_enriched(job_id: str, document_id: str, *, force: bool) -> None:
 
 def _run_embedded(job_id: str, document_id: str, *, force: bool) -> None:
     def fn(conn):
-        from tools.embed_chunks import embed_pending
+        from tools.embed_chunks import embed_pending, model_available
 
+        if not model_available():
+            raise pipeline.StageSkipped(
+                "sentence-transformers not installed; no embeddings written"
+            )
         count = embed_pending(conn, document_id)
         return {"embedded": count}
 
