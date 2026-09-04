@@ -105,10 +105,15 @@
      reach it. Anything after that is a genuine system fallback. */
   --font-display: 'Argent Pixel CF', var(--font-jacquard-12), var(--font-pixelify-sans),
     ui-monospace, monospace;
-  --font-mono: 'Departure Mono', var(--font-silkscreen), var(--font-vt323),
-    ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
-  --font-body: var(--font-geist), ui-sans-serif, system-ui, -apple-system,
-    'Segoe UI', Roboto, sans-serif;
+  /* One family in both roles now. They stay separate tokens on purpose: the
+     rule that every number, unit and code renders differently from prose is
+     what stops 380 being misread as 330, and with a shared family that
+     distinction has to come from weight and letter-spacing instead of from a
+     second typeface. Changing one role later should not drag the other. */
+  --font-mono: var(--font-jetbrains-mono), var(--font-geist-mono), ui-monospace,
+    'SFMono-Regular', Menlo, Consolas, monospace;
+  --font-body: var(--font-jetbrains-mono), var(--font-geist-mono), ui-monospace,
+    'SFMono-Regular', Menlo, Consolas, monospace;
 
   /* ---- spacing — 4px grid ---- */
   --s-1: 4px;

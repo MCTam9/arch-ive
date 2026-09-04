@@ -128,7 +128,7 @@ function ThemePanel({ theme }: { theme: "light" | "dark" }) {
           </div>
           <div>
             <p className="font-body" style={{ fontSize: "var(--fs-body)" }}>
-              Body prose renders in Geist: legible paragraph text for
+              Body prose renders in JetBrains Mono at 400: paragraph text for
               statements, guidance and definitions extracted from the corpus.
             </p>
           </div>

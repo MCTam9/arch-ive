@@ -76,6 +76,11 @@ textarea {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1;
+  /* Data and prose now share a family, so the weight and tracking carry the
+     distinction a second typeface used to. Without this a benchmark value sits
+     in a paragraph indistinguishable from the words around it. */
+  font-weight: 500;
+  letter-spacing: 0.02em;
 }
 
 .font-body {
