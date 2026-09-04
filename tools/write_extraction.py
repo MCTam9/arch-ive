@@ -154,6 +154,30 @@ def _find_node_by_code(conn: psycopg.Connection, document_id: str, code: str) ->
     ).fetchone()
 
 
+def _find_node_uncoded(conn: psycopg.Connection, document_id: str, node: Node,
+                       parent_id: str | None) -> dict | None:
+    """Match a node that carries no code, so re-extraction updates it in place.
+
+    Codes are the natural key where a document supplies them, but volume roots,
+    slide groups and most detected headings have none -- and matching only on
+    code meant every re-run inserted the whole uncoded tree again. Re-running an
+    improved extractor is a designed workflow here, so that silently duplicated
+    structure each time. Position plus kind plus title is the stable key for
+    these: an extractor that emits the same tree twice emits it identically.
+    """
+    return conn.execute(
+        """SELECT id, path::text AS path FROM doc_node
+            WHERE document_id = %s
+              AND code IS NULL
+              AND parent_id IS NOT DISTINCT FROM %s
+              AND node_kind = %s
+              AND title IS NOT DISTINCT FROM %s
+              AND ordinal = %s
+            LIMIT 1""",
+        (document_id, parent_id, node.node_kind, node.title, node.ordinal),
+    ).fetchone()
+
+
 def _write_nodes(
     conn: psycopg.Connection, document_id: str, nodes: list[Node], warnings: list[str]
 ) -> tuple[dict[str, str], dict]:
@@ -175,7 +199,8 @@ def _write_nodes(
             else:
                 parent_path = path_by_id.get(parent_id)
 
-        existing = _find_node_by_code(conn, document_id, node.code) if node.code else None
+        existing = (_find_node_by_code(conn, document_id, node.code) if node.code
+                    else _find_node_uncoded(conn, document_id, node, parent_id))
 
         if existing:
             node_id = existing["id"]
@@ -228,6 +253,7 @@ _LOOKUP_LISTS = {
     "rating_levels": None,           # keyed on (scale, ordinal)
     "frameworks": "slug",
     "criteria": None,                # keyed on (framework, code)
+    "requirement_scopes": None,      # keyed on id (caller-minted, like units/metrics)
 }
 
 
@@ -507,6 +533,42 @@ def _upsert_criteria(conn: psycopg.Connection, rows: list[dict],
     return n, criterion_ref_map
 
 
+def _upsert_requirement_scopes(conn: psycopg.Connection, rows: list[dict],
+                               framework_slug_map: dict[str, str]) -> int:
+    """requirement_scope.id is caller-minted (like unit/metric ids), so this
+    is a plain upsert -- no ref/id round trip needed. framework_slug is
+    resolved the same way _upsert_criteria resolves it, because
+    requirement_scope.framework_id is not nullable."""
+    n = 0
+    for r in rows:
+        row_for_validation = {k: v for k, v in r.items() if k != "framework_slug"}
+        _validate_payload(conn, "requirement_scope", row_for_validation)
+        fid = framework_slug_map.get(r["framework_slug"])
+        if not fid:
+            found = conn.execute(
+                "SELECT id FROM framework WHERE slug = %s", (r["framework_slug"],)
+            ).fetchone()
+            fid = found["id"] if found else None
+        if not fid:
+            raise PayloadError(
+                f"write_extraction: requirement_scope references unknown "
+                f"framework_slug {r['framework_slug']!r}"
+            )
+        conn.execute(
+            """INSERT INTO requirement_scope (id, framework_id, code, title, ordinal)
+               VALUES (%(id)s, %(fid)s, %(code)s, %(title)s, %(ordinal)s)
+               ON CONFLICT (id) DO UPDATE SET
+                 framework_id = EXCLUDED.framework_id,
+                 code         = COALESCE(EXCLUDED.code, requirement_scope.code),
+                 title        = COALESCE(EXCLUDED.title, requirement_scope.title),
+                 ordinal      = COALESCE(EXCLUDED.ordinal, requirement_scope.ordinal)""",
+            {"id": r["id"], "fid": fid, "code": r.get("code"), "title": r.get("title"),
+             "ordinal": r.get("ordinal", 0)},
+        )
+        n += 1
+    return n
+
+
 # stub column for a lookup table whose row an extractor referenced but never declared
 _STUB_COLUMN = {"metric": "name", "unit": "symbol"}
 
@@ -610,7 +672,7 @@ def _write_items(
 
     counts = {
         "items": 0, "citations": 0, "chunks_item": 0,
-        "item_terms": 0, "item_terms_skipped": 0,
+        "item_terms": 0, "item_terms_skipped": 0, "requirement_scope_applicability": 0,
     }
     covered_pages: set[int] = set()
 
@@ -670,6 +732,18 @@ def _write_items(
 
         _validate_payload(conn, table, payload)
         _insert_row(conn, table, {"knowledge_item_id": item_id, **payload})
+
+        # per-scope applicability (compliance_table.py's role/checklist
+        # reprints of the same requirement). Duck-typed on the Item -- see
+        # that module's docstring for why it isn't a declared dataclass
+        # field. requirement_scope rows are upserted earlier in
+        # write_extraction(), so scope_id is already valid here.
+        if item.item_type == "requirement":
+            for row in getattr(item, "scope_applicability", None) or []:
+                _validate_payload(conn, "requirement_scope_applicability", row)
+                _insert_row(conn, "requirement_scope_applicability",
+                            {"knowledge_item_id": item_id, **row})
+                counts["requirement_scope_applicability"] += 1
 
         if parameters:
             counts["template_parameters"] = counts.get("template_parameters", 0) + \
@@ -791,6 +865,8 @@ def write_extraction(conn: psycopg.Connection, document_id: str, extraction: Ext
     fw_count, framework_slug_map = _upsert_frameworks(conn, extraction.frameworks, document_id)
     crit_count, criterion_ref_map = _upsert_criteria(
         conn, extraction.criteria, framework_slug_map)
+    reqscope_count = _upsert_requirement_scopes(
+        conn, getattr(extraction, "requirement_scopes", []) or [], framework_slug_map)
 
     # idempotency: clear this document's prior extraction output
     conn.execute("DELETE FROM chunk WHERE document_id = %s", (document_id,))
@@ -818,6 +894,7 @@ def write_extraction(conn: psycopg.Connection, document_id: str, extraction: Ext
         "rating_levels": rl_count,
         "design_variables": dv_count,
         "design_variable_values": dvv_count,
+        "requirement_scopes": reqscope_count,
         "warnings": warnings,
     }
 

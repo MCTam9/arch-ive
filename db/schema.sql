@@ -279,6 +279,35 @@ CREATE TABLE requirement (
 CREATE INDEX ON requirement (criterion_id, rating_level_id);
 CREATE INDEX ON requirement (metric_id) WHERE metric_id IS NOT NULL;
 
+-- a framework's compliance appendix is often reprinted once per contractor
+-- role / tracking context (Concept Design, Design-Build, Main Contractor,
+-- a compliance checklist, ...), and a code's applicability marker can
+-- legitimately differ between reprints. Modelled as a join so the same
+-- requirement stays one row rather than being duplicated N times over with
+-- otherwise-identical statement text -- see extractors/compliance_table.py.
+CREATE TABLE requirement_scope (
+  id           text PRIMARY KEY,             -- 'masterplan-sustainability-design_build_contractor'
+  framework_id uuid NOT NULL REFERENCES framework(id) ON DELETE CASCADE,
+  code         text,                         -- short slug, stable across title drift
+  title        text NOT NULL,                -- verbatim scope/role label from the source
+  ordinal      int NOT NULL DEFAULT 0
+);
+CREATE INDEX ON requirement_scope (framework_id);
+-- a code identifies one scope within a framework, and the writer needs a
+-- conflict target to upsert against -- same pattern as criterion_framework_code.
+CREATE UNIQUE INDEX requirement_scope_framework_code ON requirement_scope (framework_id, code)
+  WHERE code IS NOT NULL;
+
+CREATE TABLE requirement_scope_applicability (
+  knowledge_item_id uuid NOT NULL REFERENCES knowledge_item(id) ON DELETE CASCADE,
+  scope_id          text NOT NULL REFERENCES requirement_scope(id) ON DELETE CASCADE,
+  applies           boolean NOT NULL DEFAULT true,
+  target_text       text,                    -- verbatim marker for this scope: 'Y','N/A','100',...
+  note              text,
+  PRIMARY KEY (knowledge_item_id, scope_id)
+);
+CREATE INDEX ON requirement_scope_applicability (scope_id);
+
 CREATE TABLE benchmark (
   knowledge_item_id uuid PRIMARY KEY REFERENCES knowledge_item(id) ON DELETE CASCADE,
   metric_id         text NOT NULL REFERENCES metric(id),
@@ -663,6 +692,32 @@ LEFT JOIN rating_level rl ON rl.id = r.rating_level_id
 LEFT JOIN unit u       ON u.id = r.unit_id
 LEFT JOIN citation c   ON c.knowledge_item_id = ki.id;
 
+-- one row per (requirement, scope) it was reprinted under, so "what does
+-- this code require from the Design-Build Contractor" is a single filter
+-- rather than a manual join against requirement_scope_applicability.
+CREATE VIEW v_requirement_scope_matrix WITH (security_invoker = true) AS
+SELECT r.knowledge_item_id,
+       f.slug              AS framework_slug,
+       cr.code             AS criterion_code,
+       cr.title_primary    AS criterion,
+       ki.statement,
+       r.target_text       AS canonical_target_text,
+       rs.id               AS scope_id,
+       rs.code             AS scope_code,
+       rs.title            AS scope_title,
+       rsa.applies,
+       rsa.target_text     AS scope_target_text,
+       rsa.note            AS scope_note,
+       ki.content_status, ki.review_status,
+       d.slug              AS document_slug
+FROM requirement_scope_applicability rsa
+JOIN requirement_scope rs ON rs.id = rsa.scope_id
+JOIN requirement r        ON r.knowledge_item_id = rsa.knowledge_item_id
+JOIN knowledge_item ki    ON ki.id = r.knowledge_item_id
+JOIN source_document d    ON d.id = ki.document_id
+LEFT JOIN criterion cr    ON cr.id = r.criterion_id
+LEFT JOIN framework f     ON f.id = cr.framework_id;
+
 CREATE VIEW v_search WITH (security_invoker = true) AS
 SELECT ki.id AS knowledge_item_id,
        ki.item_type, ki.title, ki.statement, ki.summary,
@@ -724,10 +779,12 @@ BEGIN
     'organisation','source_document','source_page','source_asset',
     'spreadsheet_sheet','spreadsheet_cell','doc_node','knowledge_item',
     'framework','criterion','rating_scale','rating_level','requirement',
+    'requirement_scope','requirement_scope_applicability',
     'benchmark','metric','unit','pattern','pattern_attribute','guidance',
+    'design_variable','design_variable_value',
     'definition','process_step','role','template','template_parameter',
     'project','template_instance','taxonomy','taxonomy_term','item_term',
-    'stage','stage_scheme','standard','item_standard','chunk','citation',
+    'stage','stage_scheme','item_stage','standard','item_standard','chunk','citation',
     'external_reference','ingest_job','ingest_stage_run','extraction_run',
     'audit_log'
   ]

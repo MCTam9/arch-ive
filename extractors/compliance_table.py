@@ -24,6 +24,29 @@ low."
 Ref convention: see extractors/crib_sheet.py's module docstring -- the same
 `ref`/`parent_ref`/`*_ref` convention is used here for framework, criterion
 and the requirement payload's criterion_id.
+
+Scope applicability (requirement_scope / requirement_scope_applicability, see
+db/schema.sql): the appendix is reprinted once under each of four distinct
+contractor-role scope-of-work sections -- Concept Planning and Design
+Consultant, Lead Planning and Design Consultant, Design-Build Contractor,
+Main Contractor (confirmed against the PDF's own Appendix 2 contents page,
+which lists these as 2.1-2.4; Concept and Lead are two separate roles, not
+a naming variant of one) -- and again inside a compliance-requirements
+checklist appendix. Empirically (checked against the actual PDF, not assumed)
+the four scope-of-work reprints agree on every code's target verbatim; the
+checklist reprint disagrees for ~19 codes, all deliverable-type rows where
+the scope-of-work appendix says 'Y' (a document must be produced) and the
+checklist says 'N/A' (there is no numeric KPI value to log against it in the
+checklist's KPI column -- compliance for those is tracked via its separate
+yes/no confirmation column, not the KPI figure this extractor reads) or, once
+(RE3.2), a genuinely different literal value. Rather than discard those as
+noise, each sighting of a code is now kept as one row per scope, verbatim,
+against the single canonical requirement (see `_register_scope` /
+`scope_rows_by_code`). `Extraction` has no declared field for this (editing
+tools/pipeline.py is out of scope here), so it rides as a duck-typed
+`ext.requirement_scopes` list and a duck-typed `Item.scope_applicability`
+list -- both plain attribute assignment, which a non-slotted dataclass
+instance accepts -- and tools/write_extraction.py reads them with getattr().
 """
 from __future__ import annotations
 
@@ -38,6 +61,24 @@ FRAMEWORK_SLUG = "masterplan-sustainability"
 CODE_RE = re.compile(r"^([A-Z]{2,3})(\d)\.(\d)$")
 PRINCIPLE_RE = re.compile(r"^([A-Z ,&/-]+?)\s*\[([A-Z]{2,3})\]\s*$")
 SECTION_RE = re.compile(r"^([A-Z]{2,3}\d)\s+(.+)$")
+
+# scope-heading detection, scanned across the whole document (not just the
+# appendix pages) so a role banner on a narrative page still forward-fills
+# onto the appendix pages that follow it.
+SCOPE_ROLE_HEADING_RE = re.compile(r"Scope of Work\s*$", re.IGNORECASE)
+CHECKLIST_HEADING_RE = re.compile(r"(Compliance Requirements Checklist)", re.IGNORECASE)
+APPENDIX_START_RE = re.compile(r"^APPENDIX\s+\d+\b", re.IGNORECASE)
+# guards against the appendix's own two-line title ('Sustainability' /
+# 'Scope of Work' / '2.1') being mistaken for a role banner -- a real role
+# name never starts with a bare section numeral.
+NOT_A_TITLE_RE = re.compile(r"^[\d.\s]+$")
+# the appendix table's own column header, verbatim in the PDF -- present on
+# a role section's *opening* page even when that page's table only holds a
+# couple of rows before the rest spills onto the next page (see
+# _find_appendix_pages). A stray page that merely contains a code-shaped
+# string (e.g. a review-comment log referencing 'NF1.2') never carries this.
+APPENDIX_HEADER_RE = re.compile(
+    r"SUSTAINABILITY COMPLIANCE REQUIREMENTS|STRATEGY\s*REFERENCE\s*CODE", re.IGNORECASE)
 
 NUM = r"-?\d+(?:\.\d+)?"
 
@@ -82,6 +123,32 @@ def _slugify(text: str) -> str:
     return s or "x"
 
 
+def _scan_scope_titles(doc: pymupdf.Document) -> dict[int, str | None]:
+    """Forward-filled scope title per page, verified empirically against
+    framework-vol-e2: a role banner ('Environmental Sustainability Scope of
+    Work' immediately followed by a role name) or a checklist heading sets
+    the current scope; 'APPENDIX <n>' resets it; anything else carries the
+    previous page's scope forward. A doc with none of these headings (e.g.
+    one without the appendix at all) comes back all-None -- callers treat
+    that as 'no scope information available', not an error."""
+    current: str | None = None
+    by_page: dict[int, str | None] = {}
+    for page_index, page in enumerate(doc):
+        lines = [l.strip() for l in page.get_text("text").split("\n") if l.strip()]
+        for idx, line in enumerate(lines):
+            if APPENDIX_START_RE.match(line):
+                current = None
+            elif (SCOPE_ROLE_HEADING_RE.search(line) and idx + 1 < len(lines)
+                  and not NOT_A_TITLE_RE.match(lines[idx + 1])):
+                current = lines[idx + 1].strip()
+            else:
+                m = CHECKLIST_HEADING_RE.search(line)
+                if m:
+                    current = m.group(1)
+        by_page[page_index] = current
+    return by_page
+
+
 class ComplianceTableExtractor:
     doc_kinds = ("implementation_plan", "framework")
 
@@ -113,10 +180,18 @@ class ComplianceTableExtractor:
         # the canonical strategy/target appendix is reproduced once per
         # contractor-role scope-of-work section (Concept Design, Design-
         # Build, Main Contractor, ...) plus once more as a fill-in-the-blank
-        # checklist. Same codes, same targets, several times over -- keep
-        # the first sighting of each code and flag it if a later copy
-        # disagrees, rather than emitting the same requirement 4-5x.
+        # checklist. The canonical requirement keeps the first sighting's
+        # text/target as before; every sighting (first and later) also
+        # records a per-scope applicability row -- see module docstring for
+        # what those rows actually contain, verified against the PDF.
         requirement_seen: dict[str, str] = {}
+        item_by_code: dict[str, Item] = {}
+        scope_registry: dict[str, str] = {}          # scope title -> scope id
+        scope_seen: dict[tuple[str, str], str] = {}  # (code, scope id) -> target_text
+        scope_rows_by_code: dict[str, list[dict]] = {}
+        ext.requirement_scopes = []  # duck-typed: see tools/write_extraction.py
+
+        scope_title_by_page = _scan_scope_titles(doc)
 
         appendix_pages = self._find_appendix_pages(doc)
         if not appendix_pages:
@@ -129,11 +204,18 @@ class ComplianceTableExtractor:
         for page_index in appendix_pages:
             n_requirements += self._extract_appendix_page(
                 ctx, doc, page_index, root_ref, principles, sections,
-                criteria_refs, requirement_seen, ext
+                criteria_refs, requirement_seen, item_by_code, scope_title_by_page,
+                scope_registry, scope_seen, scope_rows_by_code, ext
             )
+        for code, item in item_by_code.items():
+            item.scope_applicability = scope_rows_by_code.get(code, [])
+
         ext.stats[f"{ctx.slug}_appendix_requirements"] = n_requirements
         ext.stats[f"{ctx.slug}_appendix_pages"] = len(appendix_pages)
         ext.stats[f"{ctx.slug}_appendix_unique_codes"] = len(requirement_seen)
+        ext.stats[f"{ctx.slug}_appendix_scopes"] = len(scope_registry)
+        ext.stats[f"{ctx.slug}_appendix_scope_rows"] = sum(
+            len(v) for v in scope_rows_by_code.values())
 
         n_kpi = self._extract_strategy_sheets(ctx, doc, root_ref, criteria_refs, ext)
         ext.stats[f"{ctx.slug}_strategy_sheet_kpis"] = n_kpi
@@ -144,7 +226,19 @@ class ComplianceTableExtractor:
     def _find_appendix_pages(doc: pymupdf.Document) -> list[int]:
         """Pages whose ruled tables have a strategy-code-shaped first column
         across several rows -- the signature of the appendix, independent of
-        which PDF page(s) it happens to land on."""
+        which PDF page(s) it happens to land on.
+
+        A role section's *opening* page can carry only 1-2 code rows before
+        the table's bulk spills onto the next page (verified against
+        framework-vol-e2: page 35 -- the Lead Planning and Design Consultant
+        section's own opening page -- has exactly NF1.1 and NF1.2 and no
+        more; the other 41 codes for that scope sit on page 36). The
+        row-count threshold alone drops such a page entirely, silently
+        losing whichever codes only ever appear there. A table also counts
+        if it carries the appendix's own column header verbatim, which a
+        merely-coincidental code-shaped string elsewhere in the document
+        (a review-comment log row citing 'NF1.2', found on page 74) does
+        not."""
         hits = []
         for i, page in enumerate(doc):
             try:
@@ -157,7 +251,11 @@ class ComplianceTableExtractor:
                 except Exception:
                     continue
                 code_rows = sum(1 for r in rows if r and r[0] and CODE_RE.match(_clean(r[0])))
-                if code_rows >= 3:
+                has_header = any(
+                    APPENDIX_HEADER_RE.search(_clean(c))
+                    for r in rows for c in (r or []) if c
+                )
+                if code_rows >= 3 or (code_rows >= 1 and has_header):
                     hits.append(i)
                     break
         return hits
@@ -166,6 +264,11 @@ class ComplianceTableExtractor:
                                 page_index: int, root_ref: str,
                                 principles: dict[str, str], sections: dict[str, str],
                                 criteria_refs: set[str], requirement_seen: dict[str, str],
+                                item_by_code: dict[str, Item],
+                                scope_title_by_page: dict[int, str | None],
+                                scope_registry: dict[str, str],
+                                scope_seen: dict[tuple[str, str], str],
+                                scope_rows_by_code: dict[str, list[dict]],
                                 ext: Extraction) -> int:
         page = doc[page_index]
         tabs = page.find_tables()
@@ -229,13 +332,39 @@ class ComplianceTableExtractor:
                 self._ensure_criterion(ext, criteria_refs, code=col0, parent_code=section_code,
                                          title=requirement_text[:120])
 
-                if col0 in requirement_seen:
-                    if requirement_seen[col0] != target_text:
+                # every sighting -- first or repeat -- carries scope-specific
+                # information when a role/checklist heading was detected
+                # nearby; capture it verbatim rather than discarding it. See
+                # module docstring: the reprints are not silently identical.
+                scope_title = scope_title_by_page.get(page_index)
+                if scope_title:
+                    scope_id = self._register_scope(ext, scope_registry, scope_title)
+                    key = (col0, scope_id)
+                    prior = scope_seen.get(key)
+                    if prior is None:
+                        scope_seen[key] = target_text
+                        applies = target_text.strip().upper() not in ("N/A", "NA")
+                        scope_rows_by_code.setdefault(col0, []).append({
+                            "scope_id": scope_id, "applies": applies,
+                            "target_text": target_text, "note": f"page {page_index + 1}",
+                        })
+                    elif prior != target_text:
                         ext.warnings.append(
-                            f"{ctx.slug}: {col0} target disagrees across repeated "
-                            f"appendix copies ({requirement_seen[col0]!r} vs "
-                            f"{target_text!r}); kept the first"
+                            f"{ctx.slug}: {col0} target disagrees within scope "
+                            f"{scope_title!r} across repeated appendix copies "
+                            f"({prior!r} vs {target_text!r}); kept the first"
                         )
+                elif col0 in requirement_seen and requirement_seen[col0] != target_text:
+                    # no scope heading nearby to route the differing value to
+                    # -- the original fallback: flag it rather than lose it.
+                    ext.warnings.append(
+                        f"{ctx.slug}: {col0} target disagrees across repeated "
+                        f"appendix copies ({requirement_seen[col0]!r} vs "
+                        f"{target_text!r}); kept the first -- no scope heading "
+                        f"detected nearby"
+                    )
+
+                if col0 in requirement_seen:
                     continue
                 requirement_seen[col0] = target_text
 
@@ -246,7 +375,7 @@ class ComplianceTableExtractor:
                 deliverable_name = requirement_text.split(" developed ")[0].strip() \
                     if is_deliverable else None
 
-                ext.items.append(Item(
+                item = Item(
                     item_type="requirement",
                     statement=requirement_text,
                     node_ref=root_ref,
@@ -264,12 +393,31 @@ class ComplianceTableExtractor:
                         "deliverable_name": deliverable_name,
                         "parsed_ok": parsed_ok,
                     },
-                ))
+                )
+                ext.items.append(item)
+                item_by_code[col0] = item
                 if unit and not any(u["id"] == unit[0] for u in ext.units):
                     ext.units.append({"id": unit[0], "symbol": unit[1],
                                        "dimension": None, "si_factor": None})
                 n += 1
         return n
+
+    @staticmethod
+    def _register_scope(ext: Extraction, scope_registry: dict[str, str], title: str) -> str:
+        """requirement_scope rows are keyed on a deterministic, caller-minted
+        text id (like unit/metric ids), so no ref-resolution round trip is
+        needed in tools/write_extraction.py -- Item.scope_applicability can
+        reference the id directly."""
+        if title in scope_registry:
+            return scope_registry[title]
+        slug = _slugify(title)
+        scope_id = f"{FRAMEWORK_SLUG}-{slug}"
+        scope_registry[title] = scope_id
+        ext.requirement_scopes.append({
+            "id": scope_id, "framework_slug": FRAMEWORK_SLUG,
+            "code": slug, "title": title, "ordinal": len(scope_registry) - 1,
+        })
+        return scope_id
 
     @staticmethod
     def _ensure_criterion(ext: Extraction, seen: set[str], *, code: str,
