@@ -152,9 +152,22 @@ def test_classify_guideline_report():
 
 
 def test_classify_spread_paginated_framework():
+    """Spread pagination alone does not make a document a compliance framework.
+
+    This fixture is the smart-city report, and it used to be classified
+    'framework' -- which dispatched it to the compliance extractor, which
+    correctly declined it, which is why it produced nothing for so long. The
+    two shapes share a page geometry and a family, not an atomic unit.
+    """
     doc_kind, confidence = classify(SPREAD_FRAMEWORK[1])
-    assert doc_kind in ("framework", "implementation_plan")
+    assert doc_kind == "solutions_framework"
     assert confidence >= 0.5
+
+    # the coded compliance volumes in the same family must still classify as
+    # what they are, or this branch has simply moved the mistake
+    coded_kind, coded_confidence = classify(NO_BOOKMARK_FRAMEWORK[1])
+    assert coded_kind in ("framework", "implementation_plan")
+    assert coded_confidence >= 0.5
 
 
 def test_classify_never_raises_on_garbage(tmp_path):
