@@ -96,7 +96,13 @@ def embed_pending(conn, document_id: str | None = None) -> int:
                 "UPDATE chunk SET embedding = %s::vector WHERE id = %s",
                 (literal, row["id"]),
             )
-        conn.commit()
+        # No commit here. The stage runner calls this inside db.transaction()
+        # and an explicit commit raises there -- one stage, one transaction,
+        # per CONTRACT.md. A caller that wants per-batch durability sets
+        # autocommit on the connection instead (see __main__), which the loop
+        # below gets for free. Resumability holds either way: the query
+        # selects on `embedding IS NULL`, so an aborted run leaves the rest
+        # pending rather than losing what it wrote.
         embedded += len(rows)
         print(f"embed_chunks: {embedded}/{total}")
 
@@ -106,5 +112,13 @@ def embed_pending(conn, document_id: str | None = None) -> int:
 if __name__ == "__main__":
     doc_id = sys.argv[1] if len(sys.argv) > 1 else None
     with db.connect() as _conn:
+        # db.connect() runs set_config to apply the RLS account, which opens a
+        # transaction, and autocommit cannot be switched on inside one. Commit
+        # it first: that config is session-scoped (the `false` argument), so it
+        # survives the commit and every later statement still sees the account.
+        _conn.commit()
+        # autocommit so a long run over thousands of chunks is durable batch by
+        # batch rather than all-or-nothing
+        _conn.autocommit = True
         n = embed_pending(_conn, doc_id)
     print(f"embed_chunks: embedded {n} chunk(s)")
