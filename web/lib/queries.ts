@@ -537,3 +537,84 @@ export async function listIngestJobs(
 }
 
 export type { PoolClient };
+
+// ── review queue ──────────────────────────────────────────────────────────
+
+export type ReviewItem = {
+  id: string;
+  item_type: string;
+  title: string | null;
+  statement: string | null;
+  content_status: string;
+  extraction_confidence: number | null;
+  document_slug: string;
+  page_index: number | null;
+  printed_page_label: string | null;
+  page_image_key: string | null;
+};
+
+/** Items still awaiting a human decision, lowest confidence first — the ones
+ *  most likely to be wrong are the ones worth a reviewer's time. */
+export async function listReviewQueue(
+  accountId: string,
+  opts: { document?: string; limit?: number; offset?: number } = {},
+): Promise<{ items: ReviewItem[]; total: number }> {
+  const limit = Math.min(opts.limit ?? 25, 100);
+  const offset = opts.offset ?? 0;
+  return withAccount(accountId, async (client) => {
+    const where: string[] = ["k.review_status = 'pending'"];
+    const params: unknown[] = [];
+    if (opts.document) {
+      params.push(opts.document);
+      where.push(`d.slug = $${params.length}`);
+    }
+    const clause = where.join(" AND ");
+
+    const totalRes = await client.query(
+      `SELECT count(*)::int AS n FROM knowledge_item k
+         JOIN source_document d ON d.id = k.document_id
+        WHERE ${clause}`,
+      params,
+    );
+
+    const rows = await client.query(
+      `SELECT k.id, k.item_type::text, k.title, k.statement,
+              k.content_status::text, k.extraction_confidence,
+              d.slug AS document_slug,
+              c.page_index, c.printed_page_label, p.page_image_key
+         FROM knowledge_item k
+         JOIN source_document d ON d.id = k.document_id
+         LEFT JOIN LATERAL (
+           SELECT page_index, printed_page_label FROM citation
+            WHERE knowledge_item_id = k.id ORDER BY page_index LIMIT 1
+         ) c ON true
+         LEFT JOIN source_page p
+                ON p.document_id = k.document_id AND p.page_index = c.page_index
+        WHERE ${clause}
+        ORDER BY k.extraction_confidence NULLS FIRST, k.id
+        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset],
+    );
+    return { items: rows.rows as ReviewItem[], total: totalRes.rows[0].n as number };
+  });
+}
+
+/** Record a reviewer's decision and log who made it. Editors and owners only;
+ *  the caller enforces role, this enforces the audit trail. */
+export async function recordReview(
+  accountId: string,
+  itemId: string,
+  decision: "approved" | "rejected",
+): Promise<void> {
+  await withAccount(accountId, async (client) => {
+    await client.query(
+      "UPDATE knowledge_item SET review_status = $1, reviewed_at = now() WHERE id = $2",
+      [decision, itemId],
+    );
+    await client.query(
+      `INSERT INTO audit_log (account_id, action, knowledge_item_id)
+       VALUES ($1, $2, $3)`,
+      [accountId, `review:${decision}`, itemId],
+    );
+  });
+}

@@ -28,6 +28,7 @@ export function Nav({ email }: { email?: string | null }) {
           <nav style={{ display: "flex", gap: "var(--s-4)" }}>
             <NavLink href="/">Browse</NavLink>
             <NavLink href="/matrix">Matrix</NavLink>
+            <NavLink href="/review">Review</NavLink>
             <NavLink href="/ingest">Ingest</NavLink>
             <NavLink href="/styleguide">Styleguide</NavLink>
           </nav>

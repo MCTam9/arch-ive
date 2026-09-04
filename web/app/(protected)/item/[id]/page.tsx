@@ -9,10 +9,6 @@ import { LevelBadge } from "@/components/level-badge";
 
 export const dynamic = "force-dynamic";
 
-// TODO(page images): the review view — statement text next to the source
-// page scan — needs the R2 download route / page-image proxy, which needs
-// R2 credentials that don't exist yet in this environment. Not built here;
-// citations below link only to page numbers, not rendered images.
 
 export default async function ItemPage({
   params,
