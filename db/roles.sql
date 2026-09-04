@@ -11,6 +11,9 @@
 --
 -- Roles are cluster-wide but grants are per-database, so apply this to every
 -- database that needs it:
+-- On a fresh local database the roles have no password until you set one:
+--   ALTER ROLE arch_read PASSWORD 'dev'; ALTER ROLE arch_auth PASSWORD 'dev';
+--
 --   docker exec -e PGPASSWORD=dev archive-dev psql -U postgres -d postgres  -f db/roles.sql
 --   docker exec -e PGPASSWORD=dev archive-dev psql -U postgres -d arch_test -f db/roles.sql
 --
@@ -20,13 +23,18 @@
 
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'arch_read') THEN
-    CREATE ROLE arch_read LOGIN PASSWORD 'dev';
+    CREATE ROLE arch_read LOGIN;
   END IF;
 END $$;
 
 -- NOINHERIT: arch_read must stand on its own grants, never pick up privilege
 -- via membership in some other role later.
-ALTER ROLE arch_read NOINHERIT LOGIN PASSWORD 'dev';
+-- No PASSWORD clause anywhere in this file, deliberately. It used to set
+-- 'dev' unconditionally, which meant re-running it against any real
+-- deployment silently reset a strong password to a known one -- and a managed
+-- Postgres rejects the weak value outright. Passwords are per-environment:
+-- locally, see the header; on Neon, scripts/load_neon.sh generates them.
+ALTER ROLE arch_read NOINHERIT LOGIN;
 
 DO $$ BEGIN
   EXECUTE format('GRANT CONNECT ON DATABASE %I TO arch_read', current_database());
@@ -67,7 +75,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO arch_read;
 -- else. No SELECT on any other table, no BYPASSRLS, not a superuser.
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'arch_auth') THEN
-    CREATE ROLE arch_auth LOGIN PASSWORD 'dev' NOINHERIT;
+    CREATE ROLE arch_auth LOGIN NOINHERIT;
   END IF;
 END $$;
 
