@@ -35,6 +35,13 @@ BINARY_SUFFIXES = {
 
 MODES = {"ci", "cs", "word"}
 
+# .gitignore is advisory: `git add -f` walks straight through it. These are the
+# backstop, and unlike .gitignore they cannot be overridden from the command line.
+NEVER_COMMIT_SUFFIXES = {
+    ".pdf", ".xlsx", ".xls", ".docx", ".pptx", ".key", ".pem", ".p12",
+}
+MAX_BLOB_BYTES = 5_000_000
+
 
 @dataclass(frozen=True)
 class Rule:
@@ -118,6 +125,27 @@ def staged_paths() -> list[str]:
     return [p for p in out.split("\0") if p]
 
 
+def staged_blob_bytes(path: str) -> bytes:
+    try:
+        return subprocess.run(
+            ["git", "show", f":{path}"], capture_output=True, check=True
+        ).stdout
+    except subprocess.CalledProcessError:
+        return b""
+
+
+def check_staged_policy(path: str) -> list[str]:
+    """Source material and large blobs must never enter a public repo."""
+    problems = []
+    suffix = Path(path).suffix.lower()
+    if suffix in NEVER_COMMIT_SUFFIXES:
+        problems.append(f"  {path}  [policy] '{suffix}' is source material and is never committed")
+    size = len(staged_blob_bytes(path))
+    if size > MAX_BLOB_BYTES:
+        problems.append(f"  {path}  [policy] {size / 1e6:.1f} MB exceeds the {MAX_BLOB_BYTES / 1e6:.0f} MB limit")
+    return problems
+
+
 def staged_blob(path: str) -> str:
     try:
         return subprocess.run(
@@ -142,6 +170,7 @@ def main() -> int:
 
     if args.staged:
         for path in staged_paths():
+            hits += check_staged_policy(path)
             hits += scan_path_name(path, rules)
             if Path(path).suffix.lower() in BINARY_SUFFIXES:
                 continue
@@ -167,7 +196,7 @@ def main() -> int:
 
     if hits:
         sys.stderr.write(
-            "\n\033[31mBLOCKED: confidential terms found.\033[0m\n"
+            "\n\033[31mBLOCKED: this must not enter a public repo.\033[0m\n"
             "This repo is public. These must not be committed:\n\n"
             + "\n".join(hits[:40])
             + (f"\n  ... and {len(hits) - 40} more" if len(hits) > 40 else "")
