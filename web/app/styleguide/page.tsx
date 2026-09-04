@@ -73,7 +73,8 @@ function ThemePanel({ theme }: { theme: "light" | "dark" }) {
           {RAMP.map(([name, value]) => (
             <Swatch key={name} name={name} value={value} />
           ))}
-          <Swatch name="--blue" value="var(--blue)" />
+          <Swatch name="--mint" value="var(--mint)" />
+          <Swatch name="--mint-deep" value="var(--mint-deep)" />
         </div>
       </Section>
 

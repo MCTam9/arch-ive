@@ -32,25 +32,48 @@
 }
 
 :root {
-  /* ---- raw ramp (verbatim spec values; theme-invariant) ---- */
-  --blue: #004aff;
+  /* ---- mint accent ----
+     One saturated hue on a long neutral ramp, as before; the hue is now
+     mint (~162deg) rather than blue. Three steps, because one is not enough
+     to be both a fill and a legible link on a near-white ground:
+       pale  a tinted surface (selected row, active chip)
+       mid   the accent fill -- takes NEAR-BLACK text, not white: mint is a
+             light colour and white on it is illegible
+       deep  links and the focus ring, dark enough to clear 3:1 against the
+             page and 4.5:1 as text */
+  --mint-pale: #baf2e3;
+  --mint: #7fd8be;
+  --mint-deep: #327b66;
+
+  /* The four performance bands below are colour-coded in the SOURCE
+     documents, so a Level 3 cell reads the same on screen as on paper. They
+     are data encoding, not theme: level-4's blue stays blue even though the
+     accent no longer is, and it has to, because the alternative -- a mint
+     level-4 -- would sit right next to level-3's green and stop the two
+     bands being tellable apart. */
+  --source-blue: #004aff;
+
+  /* ---- neutral ramp: same lightness at every step, re-pointed to the
+     accent's hue so the greys read as chosen rather than inherited ---- */
   --n900: #171818;
-  --n800: #30353e;
-  --n700: #404450;
-  --n600: #545863;
-  --n500: #8c909d;
-  --n400: #d0d3da;
-  --n300: #e1e2e9;
-  --n200: #f0f1f6;
-  --n100: #f8f8fa;
+  --n800: #303e3a;
+  --n700: #40504b;
+  --n600: #54635f;
+  --n500: #8c9d98;
+  --n400: #d0dad7;
+  --n300: #e1e9e7;
+  --n200: #f0f6f4;
+  --n100: #f8faf9;
 
   /* ---- performance-band colours, straight off the source sheets ---- */
   --level-1: var(--n400);
   --level-2: #c86a1e;
   --level-3: #2e7d4f;
-  --level-4: var(--blue);
+  --level-4: var(--source-blue);
   --level-1-text: var(--n900);
-  --level-2-text: var(--n100);
+  /* near-black, not near-white: light text on this orange is 3.62:1 and
+     fails AA. It failed before the palette changed, too. */
+  --level-2-text: var(--n900);
   --level-3-text: var(--n100);
   --level-4-text: var(--n100);
 
@@ -115,12 +138,14 @@
   --surface-sunken: var(--n200);
   --text: var(--n900);
   --text-muted: var(--n600);
-  --text-on-accent: var(--n100);
+  --text-on-accent: var(--n900);
   --border: var(--n400);
   --border-strong: var(--n900);
-  --accent: var(--blue);
-  --accent-text: var(--n100);
-  --focus-ring: var(--blue);
+  --accent: var(--mint);
+  --accent-text: var(--n900);
+  --accent-surface: var(--mint-pale);
+  --accent-strong: var(--mint-deep);
+  --focus-ring: var(--mint-deep);
   --hatch-line: var(--n400);
   --shadow-color: var(--n900);
 }
@@ -133,12 +158,14 @@
   --surface-sunken: var(--n700);
   --text: var(--n100);
   --text-muted: var(--n400);
-  --text-on-accent: var(--n100);
+  --text-on-accent: var(--n900);
   --border: var(--n700);
   --border-strong: var(--n200);
-  --accent: #5b8cff; /* lifted for AA against n900 */
+  --accent: var(--mint);
   --accent-text: var(--n900);
-  --focus-ring: #5b8cff;
+  --accent-surface: #1d2a26;
+  --accent-strong: var(--mint);
+  --focus-ring: var(--mint);
   --hatch-line: var(--n700);
   --shadow-color: var(--n100);
 }
@@ -150,12 +177,14 @@
     --surface-sunken: var(--n700);
     --text: var(--n100);
     --text-muted: var(--n400);
-    --text-on-accent: var(--n100);
+    --text-on-accent: var(--n900);
     --border: var(--n700);
     --border-strong: var(--n200);
-    --accent: #5b8cff;
+    --accent: var(--mint);
     --accent-text: var(--n900);
-    --focus-ring: #5b8cff;
+    --accent-surface: #1d2a26;
+    --accent-strong: var(--mint);
+    --focus-ring: var(--mint);
     --hatch-line: var(--n700);
     --shadow-color: var(--n100);
   }
@@ -167,12 +196,14 @@
   --surface-sunken: var(--n200);
   --text: var(--n900);
   --text-muted: var(--n600);
-  --text-on-accent: var(--n100);
+  --text-on-accent: var(--n900);
   --border: var(--n400);
   --border-strong: var(--n900);
-  --accent: var(--blue);
-  --accent-text: var(--n100);
-  --focus-ring: var(--blue);
+  --accent: var(--mint);
+  --accent-text: var(--n900);
+  --accent-surface: var(--mint-pale);
+  --accent-strong: var(--mint-deep);
+  --focus-ring: var(--mint-deep);
   --hatch-line: var(--n400);
   --shadow-color: var(--n900);
 }
