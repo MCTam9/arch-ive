@@ -41,16 +41,22 @@ def transaction() -> Iterator[psycopg.Connection]:
             yield conn
 
 
+def _exec(conn: psycopg.Connection, sql: str, params: Sequence[Any]):
+    # psycopg parses %-placeholders whenever params are passed, so a literal
+    # LIKE '%flat%' in a parameterless query would raise. Skip the parse.
+    return conn.execute(sql, params) if params else conn.execute(sql)
+
+
 def one(conn: psycopg.Connection, sql: str, params: Sequence[Any] = ()) -> dict | None:
-    return conn.execute(sql, params).fetchone()
+    return _exec(conn, sql, params).fetchone()
 
 
 def all_rows(conn: psycopg.Connection, sql: str, params: Sequence[Any] = ()) -> list[dict]:
-    return conn.execute(sql, params).fetchall()
+    return _exec(conn, sql, params).fetchall()
 
 
 def scalar(conn: psycopg.Connection, sql: str, params: Sequence[Any] = ()) -> Any:
-    row = conn.execute(sql, params).fetchone()
+    row = _exec(conn, sql, params).fetchone()
     if not row:
         return None
     return next(iter(row.values()))
