@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireSession } from "@/lib/session";
 import { listReviewQueue, recordReview, REVIEW_STATUSES, type ReviewFilter } from "@/lib/queries";
 import { DraftWrapper } from "@/components/draft-wrapper";
+import { PageScan } from "@/components/page-scan";
 import { revalidatePath } from "next/cache";
 
 export const dynamic = "force-dynamic";
@@ -95,7 +96,7 @@ export default async function ReviewPage({
         </p>
       ) : (
         <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "var(--s-6)" }}>
-          {items.map((it) => (
+          {items.map((it, i) => (
             <li key={it.id} className="card" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 420px", gap: "var(--s-4)", padding: "var(--s-4)" }}>
               <div style={{ minWidth: 0 }}>
                 <div className="font-display" style={{ fontSize: "var(--fs-micro)", marginBottom: "var(--s-2)" }}>
@@ -156,23 +157,17 @@ export default async function ReviewPage({
                 </div>
               </div>
 
-              {/* The scan, beside the record. No grain over it: this is the
-                  surface where a person compares extracted text against the
-                  original, and texture there is noise in the literal sense. */}
-              <div style={{ border: "var(--border-width) solid var(--border)", background: "var(--surface-sunken)", minHeight: 200 }}>
-                {it.page_image_key ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={`/api/page-image/${it.page_image_key.replace(/^pages\//, "")}`}
-                    alt={`${it.document_slug} page ${it.page_index}`}
-                    style={{ width: "100%", height: "auto", display: "block" }}
-                  />
-                ) : (
-                  <p className="font-mono text-muted" style={{ padding: "var(--s-4)", fontSize: "var(--fs-sm)" }}>
-                    no page render for this citation
-                  </p>
-                )}
-              </div>
+              {/* The scan, beside the record. Only the first is eager — the
+                  other 24 used to be fetched at once, each opening its own
+                  authenticated request and database transaction. */}
+              <PageScan
+                imageKey={it.page_image_key}
+                documentLabel={it.document_title ?? it.document_slug}
+                pageIndex={it.page_index}
+                widthPt={it.width_pt}
+                heightPt={it.height_pt}
+                priority={i === 0}
+              />
             </li>
           ))}
         </ul>

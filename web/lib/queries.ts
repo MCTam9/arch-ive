@@ -1,11 +1,10 @@
 // Data access for the browse / item / matrix / ingest routes. Every function
 // takes an accountId and runs inside withAccount() (lib/db.ts) so RLS scopes
-// it correctly. Column lists are explicit — see lib/schema.ts for how the
-// requirement query tolerates a column (e.g. an in-flight "scope" dimension)
-// that may not exist yet.
+// it correctly. Column lists are explicit and come from constants in this
+// file: the app used to ask information_schema which columns existed on every
+// request, to tolerate a `requirement.scope` column that never landed.
 import type { PoolClient } from "pg";
 import { withAccount } from "./db";
-import { selectList, existingColumns, pickExisting, tableExists } from "./schema";
 
 // item_type is a fixed Postgres enum (db/schema.sql) — safe to hardcode, and
 // cheaper than round-tripping pg_enum on every facet-option request.
@@ -21,8 +20,13 @@ export const ITEM_TYPES = [
 ] as const;
 export type ItemType = (typeof ITEM_TYPES)[number];
 
-export type TaxonomyTerm = { id: string; label: string };
-export type DocumentOption = { slug: string; title: string | null; doc_kind: string };
+export type TaxonomyTerm = { id: string; label: string; n: number };
+export type DocumentOption = {
+  slug: string;
+  title: string | null;
+  doc_kind: string;
+  n: number;
+};
 
 export type FacetOptions = {
   documents: DocumentOption[];
@@ -31,28 +35,53 @@ export type FacetOptions = {
   levels: TaxonomyTerm[];
 };
 
+// One statement, not four. `Promise.all` over a single PoolClient is not
+// parallelism — node-postgres sends one statement per connection at a time —
+// so this used to cost four sequential round-trips, which with the function
+// on one continent and the database on another was most of the browse page's
+// latency.
+//
+// Each option also carries `n`, how many items actually carry it. Coverage is
+// very uneven (topic tags 487 of 771 items, stage tags 10), and an option that
+// can only ever return an empty list is worse than no option at all.
 export async function getFacetOptions(accountId: string): Promise<FacetOptions> {
   return withAccount(accountId, async (client) => {
-    const [documents, topics, scales, levels] = await Promise.all([
-      client.query<DocumentOption>(
-        `SELECT slug, title, doc_kind::text AS doc_kind FROM source_document WHERE is_current ORDER BY slug`,
-      ),
-      client.query<TaxonomyTerm>(
-        `SELECT id, label FROM taxonomy_term WHERE taxonomy_id = 'topic' ORDER BY path NULLS LAST, ordinal`,
-      ),
-      client.query<TaxonomyTerm>(
-        `SELECT id, label FROM taxonomy_term WHERE taxonomy_id = 'scale' ORDER BY ordinal`,
-      ),
-      client.query<TaxonomyTerm>(
-        `SELECT id, label FROM taxonomy_term WHERE taxonomy_id = 'level' ORDER BY ordinal`,
-      ),
-    ]);
-    return {
-      documents: documents.rows,
-      topics: topics.rows,
-      scales: scales.rows,
-      levels: levels.rows,
-    };
+    const { rows } = await client.query<{ facets: FacetOptions }>(`
+      WITH terms AS (
+        SELECT tt.taxonomy_id, tt.id, tt.label, tt.path, tt.ordinal,
+               count(it.knowledge_item_id)::int AS n
+          FROM taxonomy_term tt
+          LEFT JOIN item_term it ON it.term_id = tt.id
+         WHERE tt.taxonomy_id IN ('topic', 'scale', 'level')
+         GROUP BY tt.id, tt.taxonomy_id, tt.label, tt.path, tt.ordinal
+      ), docs AS (
+        SELECT sd.slug, sd.title, sd.doc_kind::text AS doc_kind,
+               count(ki.id)::int AS n
+          FROM source_document sd
+          LEFT JOIN knowledge_item ki ON ki.document_id = sd.id
+         WHERE sd.is_current
+         GROUP BY sd.slug, sd.title, sd.doc_kind
+      )
+      SELECT json_build_object(
+        'documents', coalesce((
+          SELECT json_agg(json_build_object(
+                   'slug', slug, 'title', title, 'doc_kind', doc_kind, 'n', n)
+                 ORDER BY slug) FROM docs), '[]'::json),
+        'topics', coalesce((
+          SELECT json_agg(json_build_object('id', id, 'label', label, 'n', n)
+                 ORDER BY path NULLS LAST, ordinal)
+            FROM terms WHERE taxonomy_id = 'topic'), '[]'::json),
+        'scales', coalesce((
+          SELECT json_agg(json_build_object('id', id, 'label', label, 'n', n)
+                 ORDER BY ordinal)
+            FROM terms WHERE taxonomy_id = 'scale'), '[]'::json),
+        'levels', coalesce((
+          SELECT json_agg(json_build_object('id', id, 'label', label, 'n', n)
+                 ORDER BY ordinal)
+            FROM terms WHERE taxonomy_id = 'level'), '[]'::json)
+      ) AS facets
+    `);
+    return rows[0].facets;
   });
 }
 
@@ -161,7 +190,6 @@ const SUBTYPE_TABLES: Record<ItemType, { table: string; columns: string[] }> = {
       "is_deliverable",
       "deliverable_name",
       "parsed_ok",
-      "scope", // in-flight column (see lib/schema.ts) — included only if present
     ],
   },
   benchmark: {
@@ -224,7 +252,10 @@ export type ItemDetail = {
     page_index: number | null;
     printed_page_label: string | null;
     document_slug: string;
+    document_title: string | null;
     page_image_key: string | null;
+    width_pt: number | null;
+    height_pt: number | null;
   }[];
   terms: { taxonomy_id: string; label: string }[];
   // per-scope applicability (e.g. "Design-Build Contractor", "Main
@@ -260,8 +291,6 @@ export async function getKnowledgeItem(
     let payload: Record<string, unknown> | null = null;
 
     if (itemType === "requirement") {
-      const reqCols = await existingColumns(client, "requirement");
-      const extra = pickExisting(reqCols, ["scope"]).map((c) => `r.${c}`).join(", ");
       const { rows } = await client.query(
         `
         SELECT r.requirement_kind::text AS requirement_kind, r.target_text, r.target_value,
@@ -270,7 +299,6 @@ export async function getKnowledgeItem(
                rl.ordinal AS level_ordinal, rl.code AS level_code, rl.name AS level_name,
                c.code AS criterion_code, coalesce(c.title_primary, c.title_alt) AS criterion_title,
                m.name AS metric_name
-               ${extra ? `, ${extra}` : ""}
         FROM requirement r
         LEFT JOIN unit u ON u.id = r.unit_id
         LEFT JOIN rating_level rl ON rl.id = r.rating_level_id
@@ -297,16 +325,21 @@ export async function getKnowledgeItem(
       );
       payload = rows[0] ?? null;
     } else {
+      // Column lists come from the constant above, not from
+      // information_schema. The old version asked the database which columns
+      // existed on every item page — two `information_schema` probes on every
+      // cold lambda — to tolerate a `requirement.scope` column that was never
+      // added and never will be: the scope dimension landed as the
+      // requirement_scope / requirement_scope_applicability tables instead.
+      // If a column is ever added, add it here in the same change.
       const subtype = SUBTYPE_TABLES[itemType];
       if (subtype) {
-        const cols = await selectList(client, subtype.table, "t", subtype.columns);
-        if (cols) {
-          const { rows } = await client.query(
-            `SELECT ${cols} FROM ${subtype.table} t WHERE t.knowledge_item_id = $1`,
-            [id],
-          );
-          payload = rows[0] ?? null;
-        }
+        const cols = subtype.columns.map((c) => `t.${c}`).join(", ");
+        const { rows } = await client.query(
+          `SELECT ${cols} FROM ${subtype.table} t WHERE t.knowledge_item_id = $1`,
+          [id],
+        );
+        payload = rows[0] ?? null;
       }
     }
 
@@ -315,7 +348,8 @@ export async function getKnowledgeItem(
       // the review queue, so deciding an item was also the act of hiding the
       // page it was extracted from.
       `SELECT c.page_index, c.printed_page_label, d.slug AS document_slug,
-              p.page_image_key
+              d.title AS document_title,
+              p.page_image_key, p.width_pt, p.height_pt
        FROM citation c
        JOIN source_document d ON d.id = c.document_id
        LEFT JOIN source_page p
@@ -333,8 +367,11 @@ export async function getKnowledgeItem(
       [id],
     );
 
+    // No tableExists() guard: requirement_scope_applicability is in
+    // db/schema.sql and on every database. The guard was a round trip whose
+    // answer was always yes.
     let scopes: ItemDetail["scopes"] = [];
-    if (itemType === "requirement" && (await tableExists(client, "requirement_scope_applicability"))) {
+    if (itemType === "requirement") {
       const { rows } = await client.query(
         `SELECT rs.title, rs.code, rsa.applies, rsa.target_text, rsa.note
          FROM requirement_scope_applicability rsa
@@ -382,7 +419,6 @@ export type MatrixCell = {
   content_status: string;
   review_status: string;
   page_index: number | null;
-  extra: Record<string, unknown>;
 };
 
 export async function getMatrixDocuments(
@@ -445,11 +481,15 @@ export async function getMatrix(
       criteriaParams,
     );
 
-    // degrade gracefully if `scope` (or any other future column) isn't on
-    // requirement yet — see lib/schema.ts
-    const reqCols = await existingColumns(client, "requirement");
-    const extraCols = pickExisting(reqCols, ["scope"]);
-    const extraSelect = extraCols.map((c) => `r.${c}`).join(", ");
+    // The sheet filter has to reach the CELLS, not just the criteria. It used
+    // to narrow only the rows, so picking a sheet kept every other sheet's
+    // requirements inside those rows — the table looked filtered and was not.
+    const cellsParams: unknown[] = [framework.id];
+    let cellDocFilter = "";
+    if (documentSlug) {
+      cellsParams.push(documentSlug);
+      cellDocFilter = `AND d.slug = $${cellsParams.length}`;
+    }
 
     const cellsRes = await client.query(
       `
@@ -459,17 +499,17 @@ export async function getMatrix(
              r.is_deliverable, ki.content_status::text AS content_status,
              ki.review_status::text AS review_status,
              cit.page_index
-             ${extraSelect ? `, ${extraSelect}` : ""}
       FROM requirement r
       JOIN knowledge_item ki ON ki.id = r.knowledge_item_id
+      JOIN source_document d ON d.id = ki.document_id
       JOIN criterion c ON c.id = r.criterion_id
       LEFT JOIN unit u ON u.id = r.unit_id
       LEFT JOIN LATERAL (
         SELECT page_index FROM citation WHERE citation.knowledge_item_id = ki.id ORDER BY page_index LIMIT 1
       ) cit ON true
-      WHERE c.framework_id = $1
+      WHERE c.framework_id = $1 ${cellDocFilter}
       `,
-      [framework.id],
+      cellsParams,
     );
 
     const cells = new Map<string, MatrixCell[]>();
@@ -478,10 +518,8 @@ export async function getMatrix(
       const { criterion_id, rating_level_id, ...rest } = row;
       void criterion_id;
       void rating_level_id;
-      const extra: Record<string, unknown> = {};
-      for (const c of extraCols) extra[c] = row[c];
       const list = cells.get(key) ?? [];
-      list.push({ ...(rest as MatrixCell), extra });
+      list.push(rest as MatrixCell);
       cells.set(key, list);
     }
 
@@ -556,10 +594,14 @@ export type ReviewItem = {
   content_status: string;
   extraction_confidence: number | null;
   document_slug: string;
+  document_title: string | null;
   review_status: string;
   page_index: number | null;
   printed_page_label: string | null;
   page_image_key: string | null;
+  width_pt: number | null;
+  height_pt: number | null;
+  total?: number;
 };
 
 export const REVIEW_STATUSES = ["pending", "approved", "rejected", "all"] as const;
@@ -591,19 +633,21 @@ export async function listReviewQueue(
     }
     const clause = where.join(" AND ");
 
-    const totalRes = await client.query(
-      `SELECT count(*)::int AS n FROM knowledge_item k
-         JOIN source_document d ON d.id = k.document_id
-        WHERE ${clause}`,
-      params,
-    );
-
+    // One statement, not two: `count(*) OVER ()` on the windowed set gives the
+    // pre-LIMIT total alongside the page, so the header count and the rows
+    // come back together instead of costing a second round trip.
+    //
+    // width_pt/height_pt come along so the page scan can reserve its space
+    // before it loads. They are populated for all 806 pages, in three
+    // geometries, and without them every image reflows its row on decode.
     const rows = await client.query(
       `SELECT k.id, k.item_type::text, k.title, k.statement,
               k.content_status::text, k.extraction_confidence,
               k.review_status::text AS review_status,
-              d.slug AS document_slug,
-              c.page_index, c.printed_page_label, p.page_image_key
+              d.slug AS document_slug, d.title AS document_title,
+              c.page_index, c.printed_page_label,
+              p.page_image_key, p.width_pt, p.height_pt,
+              count(*) OVER ()::int AS total
          FROM knowledge_item k
          JOIN source_document d ON d.id = k.document_id
          LEFT JOIN LATERAL (
@@ -617,7 +661,20 @@ export async function listReviewQueue(
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, limit, offset],
     );
-    return { items: rows.rows as ReviewItem[], total: totalRes.rows[0].n as number };
+    if (rows.rows.length > 0) {
+      return { items: rows.rows as ReviewItem[], total: rows.rows[0].total as number };
+    }
+    // An empty page past the end carries no window row, so the total is
+    // unknown — and reporting 0 would hide the "previous" link and strand the
+    // reader. Only this rare path pays for a second statement.
+    if (offset === 0) return { items: [], total: 0 };
+    const totalRes = await client.query(
+      `SELECT count(*)::int AS n FROM knowledge_item k
+         JOIN source_document d ON d.id = k.document_id
+        WHERE ${clause}`,
+      params,
+    );
+    return { items: [], total: totalRes.rows[0].n as number };
   });
 }
 

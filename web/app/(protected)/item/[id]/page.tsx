@@ -6,6 +6,7 @@ import { getKnowledgeItem } from "@/lib/queries";
 import { Mono } from "@/components/mono";
 import { DraftWrapper } from "@/components/draft-wrapper";
 import { LevelBadge } from "@/components/level-badge";
+import { PageScan } from "@/components/page-scan";
 
 export const dynamic = "force-dynamic";
 
@@ -108,24 +109,15 @@ export default async function ItemPage({
                   {c.page_index != null && ` · pdf p${c.page_index}`}
                   {c.printed_page_label && ` · printed p${c.printed_page_label}`}
                 </span>
-                {/* The page this record came from. No grain over it -- this is
-                    where a reader checks the extraction against the original,
-                    and texture there is noise in the literal sense. */}
-                {c.page_image_key && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={`/api/page-image/${c.page_image_key.replace(/^pages\//, "")}`}
-                    alt={`${c.document_slug} page ${c.page_index}`}
-                    loading="lazy"
-                    style={{
-                      width: "100%",
-                      height: "auto",
-                      display: "block",
-                      border: "var(--border-width) solid var(--border)",
-                      background: "var(--surface-sunken)",
-                    }}
-                  />
-                )}
+                {/* The page this record came from. */}
+                <PageScan
+                  imageKey={c.page_image_key}
+                  documentLabel={c.document_title ?? c.document_slug}
+                  pageIndex={c.page_index}
+                  widthPt={c.width_pt}
+                  heightPt={c.height_pt}
+                  priority={i === 0}
+                />
               </li>
             ))}
           </ul>
