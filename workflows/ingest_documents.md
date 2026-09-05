@@ -180,6 +180,38 @@ away from being excluded whenever figures reach the index. The share varies
 enormously by section — 0 in the typology drawing chapters, 35 of 40 in
 landscape materials — so it cannot be predicted per document.
 
+### Getting the descriptions into the index
+
+A description sitting on `source_asset` is write-only data: it is in no index,
+so the numbers inside a benchmark table that exists only as a picture cannot be
+found by searching for them. `tools/chunk_figures.py` puts them in `chunk`,
+where the generated `tsv` and `tools/embed_chunks.py` do the rest.
+
+```sh
+python3 -m tools.chunk_figures            # dry run
+python3 -m tools.chunk_figures --yes
+python3 -m tools.embed_chunks             # always the second step
+python3 -m tools.chunk_figures --status
+```
+
+- **`chunk.asset_id` is the key**, and the reason re-running is safe: a new
+  description is inserted, a changed one is rewritten *and has its embedding
+  cleared*, and one that was withdrawn or downgraded to decorative has its
+  chunk removed. A stale chunk left behind stays searchable and describes a
+  figure nobody would describe that way now.
+- **Decorative figures never reach the index** — the `Decorative image — `
+  prefix is what excludes them, which is the whole reason it is a literal
+  convention. 784 of the 898 descriptions are indexed.
+- **`content_status` stays `'real'`, and that is not a shrug.** It describes
+  how finished the *source* is, and the figure genuinely appears in the
+  document. Who wrote the sentence is the other axis, carried by `vlm_model`
+  and recoverable through `asset_id` — which is what the web uses to stamp
+  every description it renders. A page or figure result is reachable at
+  `/page/<page id>`, since neither has an `/item/<id>` of its own.
+- Run it against **both** databases, like every other write in this workflow.
+  Roughly 30-45s against Neon, almost all of it per-row UPDATEs rather than the
+  model.
+
 ### Every run leaves an audit row
 
 `describe_figures` writes one `audit_log` row per document per run:
