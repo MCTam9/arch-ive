@@ -142,6 +142,76 @@ export async function getHomeSummary(accountId: string): Promise<HomeSummary> {
   });
 }
 
+export type BrowseResults = {
+  items: BrowseItem[];
+  total: number;
+  /** How many page and figure matches an item-only facet hid. Counted in the
+   *  same statement as the results, so the sentence the page prints is never a
+   *  guess. */
+  suppressed: number;
+  kindCounts: Partial<Record<ResultKind, number>>;
+};
+
+export type PageAsset = {
+  id: string;
+  image_key: string | null;
+  /** [x0, y0, x1, y1] in PDF points, top-left origin — the same space as the
+   *  page's width_pt/height_pt, so an overlay is four percentages. */
+  bbox: number[] | null;
+  vlm_description: string | null;
+  vlm_model: string | null;
+};
+
+export type SourcePageDetail = {
+  id: string;
+  page_index: number;
+  printed_page_label: string | null;
+  text: string | null;
+  page_image_key: string | null;
+  width_pt: number | null;
+  height_pt: number | null;
+  content_status: string;
+  document_slug: string;
+  document_title: string | null;
+  assets: PageAsset[];
+};
+
+/** One page, its scan and the figures on it.
+ *
+ *  Search can return a page's raw text or a figure's description, and neither
+ *  is a knowledge_item, so neither has an /item/[id] to land on. This is where
+ *  they go: the scan is the answer to "where did that come from", and for a
+ *  figure it is the only way to check a generated description against the
+ *  thing it describes.
+ */
+export async function getSourcePage(
+  accountId: string,
+  pageId: string,
+): Promise<SourcePageDetail | null> {
+  return withAccount(accountId, async (client) => {
+    const { rows } = await client.query<SourcePageDetail>(
+      `SELECT p.id::text, p.page_index, p.printed_page_label, p.text,
+              p.page_image_key, p.width_pt::float8, p.height_pt::float8,
+              p.content_status::text AS content_status,
+              d.slug AS document_slug, d.title AS document_title,
+              coalesce((
+                SELECT json_agg(json_build_object(
+                         'id', a.id::text, 'image_key', a.image_key,
+                         'bbox', a.bbox, 'vlm_description', a.vlm_description,
+                         'vlm_model', a.vlm_model)
+                       ORDER BY a.bbox[2], a.bbox[1])
+                  FROM source_asset a
+                 WHERE a.page_id = p.id AND a.image_key IS NOT NULL
+              ), '[]'::json) AS assets
+         FROM source_page p
+         JOIN source_document d ON d.id = p.document_id
+        WHERE p.id = $1`,
+      [pageId],
+    );
+    return rows[0] ?? null;
+  });
+}
+
 export type BrowseFilters = {
   documentSlug?: string;
   itemType?: string;
@@ -151,8 +221,21 @@ export type BrowseFilters = {
   q?: string;
 };
 
+/** 'item' is an extracted knowledge_item; 'page' is the raw text of a page no
+ *  item was extracted from; 'figure' is a model-written description of a
+ *  cropped figure. The last one is not something the document says, which is
+ *  why it carries its model with it wherever it is rendered. */
+export type ResultKind = "item" | "page" | "figure";
+
 export type BrowseItem = {
   id: string;
+  kind: ResultKind;
+  /** figure only -- the asset whose description this is */
+  asset_id?: string | null;
+  /** figure only -- provenance, and the reason the card must stamp it */
+  vlm_model?: string | null;
+  /** page and figure -- where the result lives, for the /page/[id] link */
+  page_id?: string | null;
   item_type: string;
   title: string | null;
   statement: string | null;
@@ -196,14 +279,21 @@ export const BROWSE_PAGE_SIZE = 25;
  *  is what lets it answer loosely-worded questions. A query vector has to come
  *  from the same local bge-small model, which cannot run in a Vercel function,
  *  so the web path is lexical only and the hybrid path stays with the MCP
- *  server. It also cannot see the 398 of 1,169 chunks that carry no
- *  knowledge_item_id.
+ *  server.
+ *
+ *  A search reaches all three kinds of chunk: the 771 derived from knowledge
+ *  items, the 398 derived from pages no item was extracted from, and the 784
+ *  figure descriptions. It used to inner-join knowledge_item, which excluded
+ *  the last two -- so a benchmark table that exists only as a picture could
+ *  not be found by searching for the numbers in it. The unfiltered list is
+ *  still items only: it is a catalogue of what was extracted, and the facet
+ *  counts beside it describe exactly that.
  */
 export async function listKnowledgeItems(
   accountId: string,
   filters: BrowseFilters,
   opts: { limit?: number; offset?: number } = {},
-): Promise<{ items: BrowseItem[]; total: number }> {
+): Promise<BrowseResults> {
   const limit = Math.min(opts.limit ?? BROWSE_PAGE_SIZE, 100);
   const offset = Math.max(opts.offset ?? 0, 0);
   return withAccount(accountId, async (client) => {
@@ -226,12 +316,29 @@ export async function listKnowledgeItems(
        WHERE it.knowledge_item_id = ki.id
          AND tt.path <@ (SELECT path FROM taxonomy_term WHERE id = ?))`;
 
+    // Document is the only filter that means anything for all three kinds --
+    // every chunk has a document_id. The other four hang off knowledge_item
+    // and item_term, and a page or figure chunk cannot satisfy them or fail
+    // them; the predicate is simply undefined for it. So they are tracked
+    // separately: applied as a predicate for items, and counted as a
+    // suppression for everything else, which the page then says out loud.
+    const itemOnly: string[] = [];
+    const pushItemOnly = (sql: string, value: unknown) => {
+      params.push(value);
+      itemOnly.push(sql.replace("?", `$${params.length}`));
+    };
+
     if (filters.documentSlug) push("d.slug = ?", filters.documentSlug);
-    if (filters.itemType) push("ki.item_type = ?::item_type", filters.itemType);
-    if (filters.topicId) push(TERM_SUBTREE, filters.topicId);
-    if (filters.scaleId) push(TERM_SUBTREE, filters.scaleId);
-    if (filters.levelId) push(TERM_SUBTREE, filters.levelId);
-    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    if (filters.itemType) pushItemOnly("ki.item_type = ?::item_type", filters.itemType);
+    if (filters.topicId) pushItemOnly(TERM_SUBTREE, filters.topicId);
+    if (filters.scaleId) pushItemOnly(TERM_SUBTREE, filters.scaleId);
+    if (filters.levelId) pushItemOnly(TERM_SUBTREE, filters.levelId);
+
+    // The unranked path lists items and nothing else, so there the two sets
+    // are simply concatenated -- no kind can be suppressed from a list that
+    // only ever held one.
+    const allConditions = [...conditions, ...itemOnly];
+    const where = allConditions.length ? `WHERE ${allConditions.join(" AND ")}` : "";
 
     // Shared tail: the columns every row needs, plus the pre-LIMIT total, so
     // the header count and the page come back in one statement.
@@ -250,7 +357,8 @@ export async function listKnowledgeItems(
     if (!filters.q) {
       params.push(limit, offset);
       const { rows } = await client.query(
-        `SELECT ${SELECT_COLUMNS}, NULL::float8 AS score, NULL::text AS snippet,
+        `SELECT ${SELECT_COLUMNS}, 'item'::text AS kind,
+                NULL::float8 AS score, NULL::text AS snippet,
                 count(*) OVER ()::int AS total
            FROM knowledge_item ki
            JOIN source_document d ON d.id = ki.document_id
@@ -260,12 +368,13 @@ export async function listKnowledgeItems(
           LIMIT $${params.length - 1} OFFSET $${params.length}`,
         params,
       );
-      return { items: rows as BrowseItem[], total: rows[0]?.total ?? 0 };
+      const total = rows[0]?.total ?? 0;
+      return { items: rows as BrowseItem[], total, suppressed: 0, kindCounts: { item: total } };
     }
 
-    // The facet predicates are written against ki/d and have to apply inside
-    // the ranking legs, not after them: rank-then-filter would return an empty
-    // page whenever the top matches happened to miss the chosen facet.
+    // The document predicate has to apply inside the ranking legs, not after
+    // them: rank-then-filter would return an empty page whenever the top
+    // matches happened to miss the chosen document.
     params.push(filters.q);
     const q = `$${params.length}`;
     params.push(`%${filters.q}%`);
@@ -274,14 +383,35 @@ export async function listKnowledgeItems(
     const limitP = `$${params.length - 1}`;
     const offsetP = `$${params.length}`;
 
+    // A page chunk is a whole page of raw text, and one of them is three
+    // characters long. Item and figure chunks are composed, so the floor is
+    // page-only: a blanket one would delete 180 short item chunks from search,
+    // and they are perfectly good answers.
+    const PAGE_TEXT_FLOOR =
+      "(ch.knowledge_item_id IS NOT NULL OR ch.asset_id IS NOT NULL OR length(ch.text) >= 40)";
+    const baseWhere = `WHERE ${[...conditions, PAGE_TEXT_FLOOR].join(" AND ")}`;
+    const itemOk = itemOnly.length ? `(${itemOnly.join(" AND ")})` : "true";
+
     const { rows } = await client.query(
       `
       WITH base AS (
-        SELECT ch.id AS chunk_id, ch.tsv, ch.text, ki.id AS item_id
+        SELECT ch.id AS chunk_id, ch.tsv, ch.text, ch.document_id, ch.page_from,
+               ki.id AS item_id, ch.asset_id,
+               -- An item groups all of its chunks into one result; a page or
+               -- figure chunk is a result on its own. Grouping used to be on
+               -- item_id alone, which gave a chunk with no item nowhere to
+               -- live -- it was not merely filtered out, it had no key.
+               coalesce(ki.id, ch.id) AS result_id,
+               CASE WHEN ki.id IS NOT NULL      THEN 'item'
+                    WHEN ch.asset_id IS NOT NULL THEN 'figure'
+                    ELSE 'page' END AS kind,
+               -- Non-items can never satisfy an item-only facet. Carried as a
+               -- flag rather than a WHERE so the ones it hides can be counted.
+               ${itemOk} AS ok
           FROM chunk ch
-          JOIN knowledge_item ki ON ki.id = ch.knowledge_item_id
-          JOIN source_document d ON d.id = ki.document_id
-         ${where}
+          LEFT JOIN knowledge_item ki ON ki.id = ch.knowledge_item_id
+          JOIN source_document d ON d.id = ch.document_id
+         ${baseWhere}
       ),
       -- OR-of-lexemes, built in SQL so there is no client-side tokenising to
       -- keep in step with the 'english' dictionary.
@@ -290,19 +420,18 @@ export async function listKnowledgeItems(
           FROM unnest(to_tsvector('english', ${q})) AS lexeme
       ),
       fts AS (
-        SELECT chunk_id, item_id, text,
-               ts_rank(tsv, websearch_to_tsquery('english', ${q})) AS rank
-          FROM base
-         WHERE tsv @@ websearch_to_tsquery('english', ${q})
+        SELECT b.*, ts_rank(b.tsv, websearch_to_tsquery('english', ${q})) AS rank
+          FROM base b
+         WHERE b.tsv @@ websearch_to_tsquery('english', ${q})
       ),
       fts_or AS (
-        SELECT b.chunk_id, b.item_id, b.text, ts_rank(b.tsv, o.tsq) AS rank
+        SELECT b.*, ts_rank(b.tsv, o.tsq) AS rank
           FROM base b CROSS JOIN or_query o
          WHERE NOT EXISTS (SELECT 1 FROM fts)
            AND o.tsq IS NOT NULL AND b.tsv @@ o.tsq
       ),
       literal AS (
-        SELECT b.chunk_id, b.item_id, b.text, 0.0::float4 AS rank
+        SELECT b.*, 0.0::float4 AS rank
           FROM base b
          WHERE NOT EXISTS (SELECT 1 FROM fts)
            AND NOT EXISTS (SELECT 1 FROM fts_or)
@@ -311,35 +440,78 @@ export async function listKnowledgeItems(
       hits AS (
         SELECT * FROM fts UNION ALL SELECT * FROM fts_or UNION ALL SELECT * FROM literal
       ),
-      -- One row per item, scored by its best chunk. max(), not sum(): summing
+      -- One row per result, scored by its best chunk. max(), not sum(): summing
       -- would rank a long item above a precise one for being long.
-      per_item AS (
-        SELECT item_id,
+      per_result AS (
+        SELECT result_id, item_id, asset_id, kind, document_id, ok,
                max(rank) AS score,
-               (array_agg(text ORDER BY rank DESC))[1] AS best_text
-          FROM hits GROUP BY item_id
+               (array_agg(text      ORDER BY rank DESC))[1] AS best_text,
+               (array_agg(page_from ORDER BY rank DESC))[1] AS page_from
+          FROM hits
+         GROUP BY result_id, item_id, asset_id, kind, document_id, ok
+      ),
+      suppressed AS (
+        SELECT count(*)::int AS n FROM per_result WHERE NOT ok AND kind <> 'item'
+      ),
+      kinds AS (
+        SELECT coalesce(json_object_agg(kind, n), '{}'::json) AS counts
+          FROM (SELECT kind, count(*)::int AS n FROM per_result WHERE ok GROUP BY kind) s
       ),
       page AS (
         SELECT p.*, count(*) OVER ()::int AS total
-          FROM per_item p
-         ORDER BY p.score DESC, p.item_id
+          FROM per_result p
+         WHERE p.ok
+         ORDER BY p.score DESC, p.result_id
          LIMIT ${limitP} OFFSET ${offsetP}
       )
-      SELECT ${SELECT_COLUMNS}, pg.score, pg.total,
+      SELECT pg.result_id::text AS id,
+             pg.kind,
+             pg.asset_id::text AS asset_id,
+             sp.id::text AS page_id,
+             a.vlm_model,
+             -- The card's type label. A page or figure has no item_type and
+             -- must not borrow one, so it shows what it is instead.
+             coalesce(ki.item_type::text, pg.kind) AS item_type,
+             ki.title, ki.statement, ki.summary,
+             coalesce(ki.content_status::text, 'real') AS content_status,
+             ki.review_status::text AS review_status,
+             d.slug AS document_slug, d.title AS document_title,
+             d.doc_kind::text AS doc_kind,
+             coalesce(c.page_index, sp.page_index) AS page_index,
+             coalesce(c.printed_page_label, sp.printed_page_label) AS printed_page_label,
+             pg.score, pg.total, sup.n AS suppressed, kc.counts AS kind_counts,
              -- StartSel/StopSel are plain markers, split in the page. Returning
              -- HTML here would mean dangerouslySetInnerHTML on corpus text.
              ts_headline('english', pg.best_text,
                          websearch_to_tsquery('english', ${q}),
                          'MaxFragments=1,MaxWords=28,MinWords=10,StartSel=[[,StopSel=]]') AS snippet
-        FROM page pg
-        JOIN knowledge_item ki ON ki.id = pg.item_id
-        JOIN source_document d ON d.id = ki.document_id
+        -- The counts drive, the page hangs off them. Backwards-looking, and
+        -- deliberate: the suppressed and kinds CTEs always return exactly one
+        -- row, so this statement does too even when nothing matched -- and
+        -- "nothing matched, because your topic filter hid 4 figures" is
+        -- precisely the case where that sentence is worth reading. Driving
+        -- from the page CTE would return zero rows and lose the explanation,
+        -- which is the one message that page most needs. The price
+        -- is one phantom row when the page is empty, dropped in the caller.
+        FROM suppressed sup
+        CROSS JOIN kinds kc
+        LEFT JOIN page pg ON true
+        LEFT JOIN knowledge_item ki ON ki.id = pg.item_id
+        LEFT JOIN source_document d ON d.id = pg.document_id
+        LEFT JOIN source_asset a ON a.id = pg.asset_id
+        LEFT JOIN source_page sp
+               ON sp.document_id = pg.document_id AND sp.page_index = pg.page_from
         ${CITATION_JOIN}
-       ORDER BY pg.score DESC, ki.id
+       ORDER BY pg.score DESC, pg.result_id
       `,
       params,
     );
-    return { items: rows as BrowseItem[], total: rows[0]?.total ?? 0 };
+    return {
+      items: rows.filter((r) => r.id !== null) as BrowseItem[],
+      total: rows[0]?.total ?? 0,
+      suppressed: rows[0]?.suppressed ?? 0,
+      kindCounts: rows[0]?.kind_counts ?? {},
+    };
   });
 }
 

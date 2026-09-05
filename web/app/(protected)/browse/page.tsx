@@ -7,12 +7,14 @@ import {
   ITEM_TYPES,
   type BrowseFilters,
   type BrowseItem,
+  type ResultKind,
   type FacetOptions,
 } from "@/lib/queries";
 import { BROWSE_PATH, browseHref, browseParams } from "@/lib/links";
 import { Mono, CiteRef } from "@/components/mono";
 import { Button, DataLabel, EmptyState } from "@/components/ui";
 import { StatusFlag } from "@/components/draft-wrapper";
+import { GeneratedFlag } from "@/components/generated-mark";
 
 export const dynamic = "force-dynamic";
 
@@ -44,7 +46,7 @@ export default async function BrowsePage({
     q: sp.q || undefined,
   };
 
-  const [facets, { items, total }] = await Promise.all([
+  const [facets, { items, total, suppressed, kindCounts }] = await Promise.all([
     getFacetOptions(session.accountId),
     listKnowledgeItems(session.accountId, filters, { offset }),
   ]);
@@ -144,6 +146,17 @@ export default async function BrowsePage({
             {total === 0
               ? "no results"
               : `${from}–${to} of ${total} · ${ranked ? "by relevance" : "document order"}`}
+            {/* A search reaches three kinds of thing, and the mix is the most
+                useful single fact about a result set — "6 figures" says the
+                answer may be a drawing rather than a sentence. */}
+            {ranked && total > 0 && KIND_ORDER.some((k) => kindCounts[k]) && (
+              <>
+                {" · "}
+                {KIND_ORDER.filter((k) => kindCounts[k])
+                  .map((k) => `${KIND_LABEL[k]} ${kindCounts[k]}`)
+                  .join(" · ")}
+              </>
+            )}
           </Mono>
         </div>
 
@@ -177,6 +190,20 @@ export default async function BrowsePage({
           </div>
         )}
 
+        {/* Page text and figure descriptions carry no taxonomy terms and no
+            item_type — item_term is keyed on knowledge_item_id and there is no
+            chunk_term — so an item-only facet cannot include them and cannot
+            honestly exclude them either. They are dropped, and the drop is
+            stated with its count rather than left to be noticed. The
+            alternative, inheriting facets from co-located items, would invent
+            provenance, which is the one thing this corpus must not do. */}
+        {suppressed > 0 && (
+          <p className="font-mono text-muted" style={{ fontSize: "var(--fs-sm)", margin: "0 0 var(--s-4)" }}>
+            {suppressed} page and figure {suppressed === 1 ? "match is" : "matches are"} hidden:
+            topic, scale, level and item type describe extracted items only.
+          </p>
+        )}
+
         {items.length === 0 ? (
           <EmptyState
             title="No matching records"
@@ -190,13 +217,17 @@ export default async function BrowsePage({
           <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "var(--s-3)" }}>
             {items.map((item) => (
               <li key={item.id}>
-                <Link href={`/item/${item.id}?from=browse&ret=${encodeURIComponent(withFilters({}))}`} className="card card-link" style={{ padding: "var(--s-4)" }}>
+                <Link href={resultHref(item, withFilters({}))} className="card card-link" style={{ padding: "var(--s-4)" }}>
                   <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "center", marginBottom: "var(--s-2)" }}>
                     <DataLabel>{item.item_type.replace(/_/g, " ")}</DataLabel>
                     <StatusFlag status={item.content_status} />
+                    {/* A model wrote this sentence; the requirement above it
+                        was quoted. On a list where they sit together, that has
+                        to be visible on the card itself. */}
+                    <GeneratedFlag model={item.vlm_model} />
                   </div>
                   <p className="font-body" style={{ margin: 0, fontWeight: 600 }}>
-                    {item.title || item.statement?.slice(0, 120) || "(untitled)"}
+                    {item.title || item.statement?.slice(0, 120) || HEADLINE[item.kind]}
                   </p>
                   {item.snippet ? (
                     <p className="font-body text-muted" style={{ margin: "var(--s-2) 0 0", fontSize: "var(--fs-sm)" }}>
@@ -241,6 +272,30 @@ export default async function BrowsePage({
       </section>
     </div>
   );
+}
+
+const KIND_ORDER = ["item", "page", "figure"] as const;
+const KIND_LABEL: Record<ResultKind, string> = {
+  item: "items",
+  page: "pages",
+  figure: "figures",
+};
+/** A page or figure result has no title of its own; say what it is instead of
+ *  "(untitled)", which reads like a fault. */
+const HEADLINE: Record<ResultKind, string> = {
+  item: "(untitled)",
+  page: "Page text",
+  figure: "Figure",
+};
+
+/** Where a result goes. Items have their own page; page text and figures live
+ *  on the page they came from, and a figure additionally names itself so that
+ *  view can point at it. */
+function resultHref(item: BrowseItem, ret: string): string {
+  const back = `from=browse&ret=${encodeURIComponent(ret)}`;
+  if (item.kind === "item" || !item.page_id) return `/item/${item.id}?${back}`;
+  const asset = item.asset_id ? `&asset=${item.asset_id}` : "";
+  return `/page/${item.page_id}?${back}${asset}`;
 }
 
 function toOptions(terms: FacetOptions["topics"]) {

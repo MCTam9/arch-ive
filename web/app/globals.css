@@ -531,6 +531,25 @@ a.chip:focus-visible .chip-x {
   }
 }
 
+/* Rule 4, second axis: text a model wrote. Not the placeholder hatch — that
+   says "this source is unfinished", which is a different and less specific
+   claim. This one is drawn in the accent because it marks something that is
+   genuine but not quoted: the figure is real, the sentence about it is not the
+   document's. Applied by components/generated-mark.tsx, keyed on vlm_model. */
+.generated-flag {
+  display: inline-block;
+  border: var(--border-width) solid var(--accent-strong);
+  color: var(--accent-strong);
+  padding: 0 var(--s-1);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.generated-block {
+  border-left: var(--border-width-strong) solid var(--accent-strong);
+  padding-left: var(--s-3);
+}
+
 .text-muted {
   color: var(--text-muted);
 }

@@ -1,4 +1,4 @@
-// Authenticated proxy for page renders.
+// Authenticated proxy for page renders and figure crops.
 //
 // The bucket is private and its URLs are never rendered into HTML. A page
 // image is a picture of a client-confidential document, so it is reachable
@@ -14,6 +14,20 @@ import { pagesBucket } from "@/lib/pages-bucket";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+// The prefix comes from here, never from the URL. Taking key[0] verbatim would
+// make the database probe the only thing between a guessed path and the rest
+// of the bucket -- which also holds the encrypted originals. An unknown prefix
+// is a 404 before anything is queried or fetched.
+//
+// Each entry names the table and column that decide whether the caller may see
+// the object. RLS answers, not the key: source_page and source_asset are both
+// ENABLE + FORCE with the same has_access() policy, so the probe is the gate
+// for figures on exactly the terms it already was for pages.
+const PREFIXES: Record<string, { table: string; column: string }> = {
+  pages: { table: "source_page", column: "page_image_key" },
+  figures: { table: "source_asset", column: "image_key" },
+};
 
 export async function GET(
   _req: Request,
@@ -31,13 +45,18 @@ export async function GET(
   if (key.some((seg) => seg === "." || seg === ".." || seg.includes("\\"))) {
     return new NextResponse("not found", { status: 404 });
   }
-  const pathname = `pages/${key.join("/")}`;
+  const source = PREFIXES[key[0]];
+  if (!source || key.length < 2) {
+    return new NextResponse("not found", { status: 404 });
+  }
+  const pathname = key.join("/");
 
   // RLS decides, not the URL. If this account cannot see the page row, the
   // image does not exist as far as they are concerned.
   const allowed = await withAccount(session.accountId, async (client) => {
+    // Table and column are from the allowlist above, never from the request.
     const { rows } = await client.query(
-      "SELECT 1 FROM source_page WHERE page_image_key = $1 LIMIT 1",
+      `SELECT 1 FROM ${source.table} WHERE ${source.column} = $1 LIMIT 1`,
       [pathname],
     );
     return rows.length > 0;

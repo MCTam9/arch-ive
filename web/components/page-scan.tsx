@@ -59,7 +59,10 @@ export function PageScan({
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={`/api/page-image/${imageKey.replace(/^pages\//, "")}`}
+      // The full key, prefix included. This used to strip `pages/` because
+      // the route hardcoded it back on; the route now dispatches on the prefix
+      // so it can serve figure crops too, and stripping it would mangle both.
+      src={`/api/page-image/${imageKey}`}
       alt={alt}
       loading={priority ? "eager" : "lazy"}
       decoding="async"

@@ -28,6 +28,17 @@ def _embed_query(text: str) -> str | None:
     return "[" + ",".join(f"{x:.8f}" for x in vec.tolist()) + "]"
 
 
+# A page chunk is a whole page of raw text and one of them is three characters
+# long, so page-derived rows carry a length floor. Item and figure chunks are
+# composed text and are exempt: 180 item chunks are shorter than this and are
+# perfectly good answers, so a blanket floor would quietly delete them from
+# search.
+PAGE_TEXT_FLOOR = (
+    "AND (c.knowledge_item_id IS NOT NULL OR c.asset_id IS NOT NULL "
+    "OR length(c.text) >= 40)"
+)
+
+
 def _facet_clauses(facets: dict[str, str] | None) -> tuple[str, list]:
     """One EXISTS per facet value, ANDed -- a result must carry every requested
     term. `facets` maps an arbitrary label to a taxonomy_term id.
@@ -66,16 +77,22 @@ def search(conn, query: str, *, facets: dict[str, str] | None = None, limit: int
     document_slug + page_index (its citation) alongside the chunk text.
     """
     facet_sql, facet_params = _facet_clauses(facets)
+    floor = PAGE_TEXT_FLOOR
 
     fts_rows = db.all_rows(
         conn,
         f"""SELECT c.id AS chunk_id,
                    row_number() OVER (ORDER BY ts_rank(c.tsv, websearch_to_tsquery('english', %s)) DESC) AS rnk
             FROM chunk c
-            JOIN knowledge_item ki ON ki.id = c.knowledge_item_id
+            LEFT JOIN knowledge_item ki ON ki.id = c.knowledge_item_id
             WHERE c.tsv @@ websearch_to_tsquery('english', %s)
-              AND c.content_status = 'real' AND ki.content_status = 'real'
-              AND ki.review_status <> 'rejected'
+              AND c.content_status = 'real'
+              -- LEFT, so a page-derived or figure chunk is reachable at all.
+              -- The item predicates have to tolerate the null they now see,
+              -- or the outer join is undone by its own WHERE clause.
+              AND (ki.id IS NULL
+                   OR (ki.content_status = 'real' AND ki.review_status <> 'rejected'))
+              {floor}
               {facet_sql}
             ORDER BY rnk
             LIMIT 200""",
@@ -90,10 +107,12 @@ def search(conn, query: str, *, facets: dict[str, str] | None = None, limit: int
             f"""SELECT c.id AS chunk_id,
                        row_number() OVER (ORDER BY c.embedding <=> %s::vector) AS rnk
                 FROM chunk c
-                JOIN knowledge_item ki ON ki.id = c.knowledge_item_id
+                LEFT JOIN knowledge_item ki ON ki.id = c.knowledge_item_id
                 WHERE c.embedding IS NOT NULL
-                  AND c.content_status = 'real' AND ki.content_status = 'real'
-                  AND ki.review_status <> 'rejected'
+                  AND c.content_status = 'real'
+                  AND (ki.id IS NULL
+                       OR (ki.content_status = 'real' AND ki.review_status <> 'rejected'))
+                  {floor}
                   {facet_sql}
                 ORDER BY rnk
                 LIMIT 200""",

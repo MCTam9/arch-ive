@@ -22,15 +22,16 @@ export function NavLinks() {
   return (
     <nav aria-label="Sections" style={{ display: "flex", gap: "var(--s-1)" }}>
       {LINKS.map((link) => {
-        // An item page counts as Browse, because that is the section it
-        // belongs to. This used to also carry a special case for "/", which
+        // An item or source-page view counts as Browse, because that is the
+        // section they belong to — both are reached from a result. This used to also carry a special case for "/", which
         // would otherwise prefix-match every route -- browse lived there, so
         // the wordmark and this link pointed at the same place and neither
         // could honestly be current. Browse has its own path now and the
         // generic rule covers it.
         const active =
           pathname.startsWith(link.href) ||
-          (link.href === "/browse" && pathname.startsWith("/item/"));
+          (link.href === "/browse" &&
+            (pathname.startsWith("/item/") || pathname.startsWith("/page/")));
         return (
           // The active treatment used to be this ternary, painted inline. That
           // is why the nav had no hover: an inline background beats any rule a

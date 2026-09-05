@@ -37,7 +37,7 @@ from psycopg.rows import dict_row
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools import db  # noqa: E402  (all_rows/one/scalar are plain executors, not connection factories)
-from tools.search import _facet_clauses, search as _hybrid_search  # noqa: E402
+from tools.search import PAGE_TEXT_FLOOR, _facet_clauses, search as _hybrid_search  # noqa: E402
 
 READONLY_DEFAULT_DSN = "postgresql://arch_read:dev@localhost:55432/postgres"
 DEFAULT_ACCOUNT = "00000000-0000-0000-0000-0000000000aa"
@@ -147,6 +147,7 @@ def search_knowledge(conn, query: str, *, facets: dict[str, str] | None = None,
     # tools.search.search -- that function's default (real-only) behaviour
     # must stay the safe default with no way to weaken it by accident.
     facet_sql, facet_params = _facet_clauses(facets)
+    floor = PAGE_TEXT_FLOOR
     rows = db.all_rows(
         conn,
         f"""SELECT c.id AS chunk_id, c.text, c.knowledge_item_id, c.page_from, c.page_to,
@@ -155,11 +156,15 @@ def search_knowledge(conn, query: str, *, facets: dict[str, str] | None = None,
                    ki.content_status AS item_content_status,
                    d.slug AS document_slug, d.title AS document_title
             FROM chunk c
-            JOIN knowledge_item ki ON ki.id = c.knowledge_item_id
+            LEFT JOIN knowledge_item ki ON ki.id = c.knowledge_item_id
             JOIN source_document d ON d.id = c.document_id
             WHERE c.tsv @@ websearch_to_tsquery('english', %s)
-              AND ki.review_status <> 'rejected'
+              -- LEFT, so page-derived and figure chunks are reachable. The
+              -- item predicate has to tolerate the null it now sees, or the
+              -- outer join is undone by its own WHERE clause.
+              AND (ki.id IS NULL OR ki.review_status <> 'rejected')
               AND (c.page_from IS NOT NULL OR c.page_to IS NOT NULL)
+              {floor}
               {facet_sql}
             ORDER BY ts_rank(c.tsv, websearch_to_tsquery('english', %s)) DESC
             LIMIT %s""",
