@@ -59,6 +59,11 @@ guessing a key must not reach a page from a document RLS would otherwise hide.
 
 ### Scoping the token the web app runs on
 
+**Done — production has run on a read-only token since 2026-09-05.** The
+procedure below is kept because it is also the rotation procedure, and
+because `tools/check_r2_token.py` is worth running against whatever is
+configured whenever the credentials change hands.
+
 The web app only reads page renders, so its credentials should do only that.
 They started as the account-scoped R2 token, which can also write this bucket
 and list the originals bucket — those objects are client-side encrypted, but a
@@ -96,11 +101,11 @@ is checked in both directions before the value goes near production.
 5. Confirm against the live site that a signed-in page render still returns
    image bytes. A 500 from `/api/page-image` after this means the token cannot
    read; roll back by re-adding the previous pair.
-6. Delete `.tmp/r2-read.env`, and revoke the old token in the dashboard once
-   the site is confirmed working — anything else that uses it
-   (`tools/upload_page_images.py`, `rclone`) reads `.env`, not Vercel, so it is
-   unaffected by the swap but *is* affected by the revocation. Keep the
-   account-scoped token in `.env`; it is the one that still has to write.
+6. Delete `.tmp/r2-read.env`. Leave the account-scoped token in `.env` alone —
+   `tools/upload_page_images.py` and `rclone` read that file, not Vercel, and
+   they still have to write. Revoking it in Cloudflare would break both for no
+   gain: the exposure this closes is what the *deployed function* can reach,
+   and that is now read-only on one bucket.
 
 ## Document titles
 
