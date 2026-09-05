@@ -136,6 +136,68 @@ provenance is visible — applies with more force here than anywhere else in the
 system, because a plausible sentence about a drawing is far easier to mistake
 for guidance than lorem ipsum is.
 
+### Running the descriptions: fan out, then validate before writing
+
+All 898 cropped figures were described inside a Claude Code session — 20 by
+Opus in the pilot, the remaining 878 by a fan-out of Sonnet subagents. What
+made that reliable, and what to repeat:
+
+- **Batch by document and page, 40 to an agent.** Consecutive figures share a
+  page and a caption scheme, so an agent reading them in order builds context
+  a shuffled sample would not give it. Forty crops sit comfortably inside one
+  agent's window at ~1,300 visual tokens each.
+- **Give each agent the page text, and say what it is for.** It is how an
+  agent works out which prototype a drawing belongs to when the label sits
+  outside the crop. It is *not* a source of content: a description must not
+  borrow a number the image does not show. Agents held that line well when the
+  brief stated it explicitly — several flagged "label clipped, geometry only"
+  rather than guessing a figure code.
+- **One shared brief, one line per figure.** Write the standing instructions
+  once to a scratch file (`.tmp/figures/DESCRIBER.md`) and give each agent only
+  its batch number. `.tmp/` is disposable, so treat the brief as regenerated
+  per run — everything about it that matters is in this section. Agents write
+  JSONL directly and report counts, never the descriptions themselves;
+  otherwise the orchestrator's context fills with text it is about to load
+  from disk anyway.
+- **Validate against the manifest before loading.** Check every asset id
+  present, no duplicates, valid JSON, nothing under the length floor. All 22
+  batches came back 40/40, but the check is what makes that a fact rather than
+  an assumption.
+
+**Clean up after a run.** The batch manifests carry page-text excerpts and the
+JSONL carries the descriptions, both in plaintext, both client-identifying, and
+both redundant the moment `describe_figures` reports `0 rejected` and dev and
+Neon agree. Verify the database holds every line, then delete them. The crops
+themselves are worth keeping if another pass is likely; `crop_figures`
+regenerates them from the archive, at the cost of a restore and its audit rows.
+
+**`Decorative image — ` is a data convention, not a stylistic note.** 114 of
+the 898 figures are stock photography, brand covers, slide dividers and
+planting photographs: real images carrying no information. Written up as
+ordinary descriptions they would be 114 plausible paragraphs diluting search.
+The literal prefix (em dash, with a space either side) makes them one `LIKE`
+away from being excluded whenever figures reach the index. The share varies
+enormously by section — 0 in the typology drawing chapters, 35 of 40 in
+landscape materials — so it cannot be predicted per document.
+
+### Every run leaves an audit row
+
+`describe_figures` writes one `audit_log` row per document per run:
+`{"via": "tools.describe_figures", "producer": …, "figures": N}`, with the
+document referenced by id. Describing a figure means its image was sent to
+whatever produced the text, which is the same class of event as a document
+leaving the archive — and for one release it was the larger of the two going
+unrecorded, since `fetch_original` logged the restore and nothing logged the
+898 crops that followed.
+
+Two properties are pinned by `tests/test_describe_figures.py` and should stay
+that way. The log **references documents by id and carries no slug, title or
+path**: every other column is a uuid, so `detail` is the only place identifying
+text could reach the table, and nothing reading `audit_log` should be able to
+learn what the corpus is about. And the write **never raises** — the
+descriptions are committed before it runs, so a broken log degrades to a
+warning rather than failing a run whose expensive half already succeeded.
+
 ### Two idempotency traps this area used to have
 
 Both are fixed; both would silently destroy generated content, which is the

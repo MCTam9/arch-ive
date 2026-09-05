@@ -25,6 +25,14 @@ cannot carry the distinction -- its values ('real', 'wip', 'lorem', …) describ
 how finished the *source* is, not who wrote the text -- so the model and the
 timestamp are recorded on the row, and anything rendering a description is
 expected to say where it came from.
+
+Every run also writes `audit_log` rows -- one per document -- because
+describing a figure means its image was sent to whatever produced the text.
+`tools/fetch_original.py` logs a document leaving the archive; sending several
+hundred crops of that document's contents is the same kind of event, and was
+for one release the larger of the two going unrecorded. The row names the
+producer and the count and references the document by id, so the log keeps the
+property that makes it safe to read: no titles, no slugs, no paths.
 """
 from __future__ import annotations
 
@@ -32,6 +40,8 @@ import argparse
 import json
 import sys
 from pathlib import Path
+
+from psycopg.types.json import Jsonb
 
 from tools import db
 from tools.env import load_env
@@ -96,9 +106,9 @@ def sample(conn, n: int, document: str | None) -> list[dict]:
     return [{k: v for k, v in r.items() if k != "rn"} for r in rows]
 
 
-def load(conn, path: Path) -> tuple[int, list[str]]:
-    """Apply a JSONL of descriptions. Returns (written, problems)."""
-    written = 0
+def load(conn, path: Path) -> tuple[list[str], list[str]]:
+    """Apply a JSONL of descriptions. Returns (asset ids written, problems)."""
+    written: list[str] = []
     problems: list[str] = []
     for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         line = line.strip()
@@ -132,8 +142,49 @@ def load(conn, path: Path) -> tuple[int, list[str]]:
         if result.rowcount == 0:
             problems.append(f"line {lineno}: no cropped asset {asset_id}")
             continue
-        written += 1
+        written.append(asset_id)
     return written, problems
+
+
+def audit(conn, asset_ids: list[str]) -> int:
+    """One audit_log row per document: what was described, by what, how many.
+
+    Grouped by document rather than per asset because the event worth recording
+    is "figures from this document were sent to a model"; 898 rows saying so
+    individually would bury the twelve download rows sharing the table.
+
+    Never raises. A log that can fail the write it is logging is worse than no
+    log -- the descriptions are committed by the time this runs, and a warning
+    that the row is missing is recoverable in a way a lost run is not.
+    """
+    if not asset_ids:
+        return 0
+    try:
+        rows = db.all_rows(
+            conn,
+            """
+            SELECT p.document_id::text AS document_id, a.vlm_model AS model,
+                   count(*)::int AS figures
+              FROM source_asset a
+              JOIN source_page p ON p.id = a.page_id
+             WHERE a.id = ANY(%s::uuid[])
+             GROUP BY 1, 2
+            """,
+            (asset_ids,),
+        )
+        for r in rows:
+            conn.execute(
+                "INSERT INTO audit_log (account_id, action, document_id, detail) "
+                "VALUES (%s, 'describe', %s, %s)",
+                (db.account_id(), r["document_id"],
+                 Jsonb({"via": "tools.describe_figures", "producer": r["model"],
+                        "figures": r["figures"]})),
+            )
+        conn.commit()
+        return len(rows)
+    except Exception as exc:  # noqa: BLE001 -- logging must never be the failure
+        print(f"warning: could not write audit_log rows: {exc}", file=sys.stderr)
+        return 0
 
 
 def main() -> int:
@@ -175,7 +226,9 @@ def main() -> int:
             print("describe_figures: nothing written", file=sys.stderr)
             return 1
         conn.commit()
-        print(f"describe_figures: wrote {written} description(s), {len(problems)} rejected")
+        logged = audit(conn, written)
+        print(f"describe_figures: wrote {len(written)} description(s), "
+              f"{len(problems)} rejected, {logged} audit row(s)")
     return 0
 
 
