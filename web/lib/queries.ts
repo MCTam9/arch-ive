@@ -548,21 +548,34 @@ export type ReviewItem = {
   content_status: string;
   extraction_confidence: number | null;
   document_slug: string;
+  review_status: string;
   page_index: number | null;
   printed_page_label: string | null;
   page_image_key: string | null;
 };
 
-/** Items still awaiting a human decision, lowest confidence first — the ones
- *  most likely to be wrong are the ones worth a reviewer's time. */
+export const REVIEW_STATUSES = ["pending", "approved", "rejected", "all"] as const;
+export type ReviewFilter = (typeof REVIEW_STATUSES)[number];
+
+/** Items in the review queue, lowest confidence first — the ones most likely
+ *  to be wrong are the ones worth a reviewer's time.
+ *
+ *  Filterable by status rather than hardcoded to 'pending', because the page
+ *  scan renders only here: approving an item used to remove the only place in
+ *  the app where its source page could be seen. */
 export async function listReviewQueue(
   accountId: string,
-  opts: { document?: string; limit?: number; offset?: number } = {},
+  opts: { document?: string; status?: ReviewFilter; limit?: number; offset?: number } = {},
 ): Promise<{ items: ReviewItem[]; total: number }> {
   const limit = Math.min(opts.limit ?? 25, 100);
   const offset = opts.offset ?? 0;
+  const status: ReviewFilter = REVIEW_STATUSES.includes(opts.status as ReviewFilter)
+    ? (opts.status as ReviewFilter)
+    : "pending";
   return withAccount(accountId, async (client) => {
-    const where: string[] = ["k.review_status = 'pending'"];
+    // The status is validated against the literal list above and never
+    // interpolated from raw input.
+    const where: string[] = status === "all" ? ["true"] : [`k.review_status = '${status}'`];
     const params: unknown[] = [];
     if (opts.document) {
       params.push(opts.document);
@@ -580,6 +593,7 @@ export async function listReviewQueue(
     const rows = await client.query(
       `SELECT k.id, k.item_type::text, k.title, k.statement,
               k.content_status::text, k.extraction_confidence,
+              k.review_status::text AS review_status,
               d.slug AS document_slug,
               c.page_index, c.printed_page_label, p.page_image_key
          FROM knowledge_item k
@@ -604,11 +618,16 @@ export async function listReviewQueue(
 export async function recordReview(
   accountId: string,
   itemId: string,
-  decision: "approved" | "rejected",
+  decision: "approved" | "rejected" | "pending",
 ): Promise<void> {
   await withAccount(accountId, async (client) => {
     await client.query(
-      "UPDATE knowledge_item SET review_status = $1, reviewed_at = now() WHERE id = $2",
+      // reviewed_at goes back to NULL on reopen: a reopened item has not been
+      // decided, and leaving a timestamp there says it has.
+      `UPDATE knowledge_item
+          SET review_status = $1,
+              reviewed_at = CASE WHEN $1 = 'pending' THEN NULL ELSE now() END
+        WHERE id = $2`,
       [decision, itemId],
     );
     await client.query(
