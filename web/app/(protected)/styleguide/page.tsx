@@ -34,6 +34,10 @@ function Swatch({ name, value }: { name: string; value: string }) {
   );
 }
 
+// Local to this page rather than components/ui's Section, and deliberately so:
+// this one is a specimen frame with a heavier rule, sitting inside a panel that
+// forces its own theme. Sharing the app's Section would make the styleguide
+// look like a page of the app instead of a description of it.
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section style={{ marginBottom: "var(--s-10)" }}>
@@ -50,6 +54,18 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       </h2>
       {children}
     </section>
+  );
+}
+
+/** One labelled line of specimens, so every control is comparable at rest. */
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", gap: "var(--s-3)", alignItems: "center", flexWrap: "wrap", marginBottom: "var(--s-4)" }}>
+      <Mono className="text-muted" style={{ fontSize: "var(--fs-micro)", width: "9ch", flexShrink: 0 }}>
+        {label}
+      </Mono>
+      {children}
+    </div>
   );
 }
 
@@ -148,32 +164,87 @@ function ThemePanel({ theme }: { theme: "light" | "dark" }) {
         </div>
       </Section>
 
-      <Section title="Hard shadow + motion">
-        <div style={{ display: "flex", gap: "var(--s-6)", alignItems: "center" }}>
-          <div
-            className="shadow-hard"
-            style={{
-              background: "var(--surface)",
-              border: "var(--border-width) solid var(--border-strong)",
-              padding: "var(--s-4)",
-            }}
-          >
-            <Mono style={{ fontSize: "var(--fs-sm)" }}>shadow-hard</Mono>
-          </div>
-          <button
-            className="transition-fast font-display"
-            style={{
-              padding: "var(--s-3) var(--s-4)",
-              background: "var(--accent)",
-              color: "var(--accent-text)",
-              border: "var(--border-width-strong) solid var(--border-strong)",
-              fontSize: "var(--fs-label)",
-              cursor: "pointer",
-            }}
-          >
-            hover me (≤120ms)
-          </button>
+      <Section title="Hard shadow">
+        <div
+          className="shadow-hard"
+          style={{
+            background: "var(--surface)",
+            border: "var(--border-width) solid var(--border-strong)",
+            padding: "var(--s-4)",
+            display: "inline-block",
+          }}
+        >
+          <Mono style={{ fontSize: "var(--fs-sm)" }}>shadow-hard</Mono>
         </div>
+      </Section>
+
+      {/* This section is the point of the styleguide now. Its predecessor was a
+          single button labelled "hover me (≤120ms)" with no :hover rule behind
+          it — the clearest possible evidence of the bug this page exists to
+          catch, sitting on the page meant to catch it. Every state of every
+          control is specimened here, so the next person can see what exists
+          rather than grep for it. */}
+      <Section title="Interaction — hover, focus, press">
+        <p className="font-body text-muted" style={{ fontSize: "var(--fs-sm)", margin: "0 0 var(--s-4)" }}>
+          Rule 2: state transitions only, ≤160ms. Movement is mechanical — an
+          object travels into its own hard shadow when pressed, never scales or
+          fades. Tab through these as well as hovering them; focus and hover
+          are deliberately the same treatment.
+        </p>
+
+        <Row label="button">
+          <button className="btn btn-primary font-display">primary</button>
+          <button className="btn btn-secondary font-display">secondary</button>
+          <button className="btn btn-quiet font-display">quiet</button>
+          <button className="btn btn-primary font-display" disabled>
+            disabled
+          </button>
+          <button className="btn btn-secondary btn-sm font-display">small</button>
+        </Row>
+
+        <Row label="chip">
+          <a href="#" className="chip chip-filled font-mono">
+            topic energy <span className="chip-x" aria-hidden="true">×</span>
+          </a>
+          <a href="#" className="chip font-mono">
+            scale building
+          </a>
+          <span className="chip font-mono">not a link</span>
+        </Row>
+
+        <Row label="tab">
+          <a href="#" className="tab font-display" aria-current="page">
+            pending
+          </a>
+          <a href="#" className="tab font-display">
+            approved
+          </a>
+          <a href="#" className="tab font-display">
+            rejected
+          </a>
+        </Row>
+
+        <Row label="field">
+          <input className="field font-body" placeholder="search text" />
+          <select className="field font-mono" defaultValue="">
+            <option value="">all</option>
+          </select>
+        </Row>
+
+        <Row label="link">
+          <a href="#" className="link font-mono">
+            a text link
+          </a>
+          <a href="#" className="link font-body">
+            in prose
+          </a>
+        </Row>
+
+        <Row label="card-link">
+          <a href="#" className="card card-link" style={{ padding: "var(--s-3)", width: 220 }}>
+            <Mono style={{ fontSize: "var(--fs-sm)" }}>a result row</Mono>
+          </a>
+        </Row>
       </Section>
 
       <Section title="Provenance — draft / placeholder stamp">

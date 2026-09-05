@@ -46,22 +46,16 @@ export function ThemeToggle() {
   return (
     <button
       type="button"
-      className="font-display transition-fast"
+      className="btn btn-secondary btn-sm font-display"
       onClick={() => {
         setTheme(next);
         apply(next);
       }}
       aria-label={`Theme: ${LABEL[theme]}. Switch to ${LABEL[next]}.`}
       title={`Theme: ${LABEL[theme]}`}
-      style={{
-        fontSize: "var(--fs-label)",
-        background: "transparent",
-        border: "var(--border-width) solid var(--chrome-border)",
-        color: "var(--chrome-text)",
-        padding: "var(--s-1) var(--s-2)",
-        cursor: "pointer",
-        minWidth: "5ch",
-      }}
+      // Layout only. The label cycles between Auto / Light / Dark, which are
+      // different widths, and the rail should not reflow as you click through.
+      style={{ minWidth: "5ch" }}
     >
       {LABEL[theme]}
     </button>

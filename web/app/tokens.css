@@ -51,6 +51,12 @@
   --mint-pale: #baf2e3;
   --mint: #7fd8be;
   --mint-deep: #327b66;
+  /* Hover steps. A state change has to be visible without being a different
+     colour: one step along the same hue, deeper on a light ground and lighter
+     on a dark one, so the control still reads as itself mid-interaction. */
+  --mint-hover: #6bcfb1;
+  --mint-deepest: #24594a;
+  --mint-light: #a3e5d2;
   /* Card tints. The neutral ramp carries the mint hue but at 95%+ lightness
      there is no room left for it to show -- n200 reads as white. These sit
      lower and more saturated so a record actually looks tinted. */
@@ -152,9 +158,20 @@
   --shadow-offset: 4px;
   --shadow-hard: var(--shadow-offset) var(--shadow-offset) 0 0 var(--shadow-color);
   --shadow-color: var(--n900);
+  /* The pressed state of anything that casts the hard shadow: it travels
+     --press-offset toward its own shadow, and the shadow loses exactly that
+     much. The two numbers are a pair — change one and the object appears to
+     slide rather than sink. */
+  --press-offset: 2px;
+  --shadow-hard-press: var(--press-offset) var(--press-offset) 0 0 var(--shadow-color);
 
-  /* ---- motion — hover/state only, never scroll-driven ---- */
+  /* ---- motion — hover/state only, never scroll-driven ----
+     See the amended Rule 2 in globals.css. Three durations, because the three
+     gestures are not the same event: a press must land faster than a hover
+     reads, or the control feels like it is catching up with the finger. */
   --motion-fast: 120ms;
+  --motion-press: 60ms;
+  --motion-sweep: 160ms;
   --motion-ease: ease-out;
 
   /* ---- texture ---- */
@@ -173,6 +190,10 @@
   --accent-text: var(--n900);
   --accent-surface: var(--mint-pale);
   --accent-strong: var(--mint-deep);
+  --accent-hover: var(--mint-hover);
+  --accent-strong-hover: var(--mint-deepest);
+  --surface-hover: var(--mint-tint-deep);
+  --chrome-hover: var(--n200);
   --focus-ring: var(--mint-deep);
   --hatch-line: var(--n400);
   --shadow-color: var(--n900);
@@ -198,6 +219,10 @@
   --accent-text: var(--n900);
   --accent-surface: #1d2a26;
   --accent-strong: var(--mint);
+  --accent-hover: var(--mint-light);
+  --accent-strong-hover: var(--mint-light);
+  --surface-hover: var(--n700);
+  --chrome-hover: var(--n800);
   --focus-ring: var(--mint);
   --hatch-line: var(--n700);
   --shadow-color: var(--n100);
@@ -222,6 +247,10 @@
     --accent-text: var(--n900);
     --accent-surface: #1d2a26;
     --accent-strong: var(--mint);
+    --accent-hover: var(--mint-light);
+    --accent-strong-hover: var(--mint-light);
+    --surface-hover: var(--n700);
+    --chrome-hover: var(--n800);
     --focus-ring: var(--mint);
     --hatch-line: var(--n700);
     --shadow-color: var(--n100);
@@ -246,6 +275,10 @@
   --accent-text: var(--n900);
   --accent-surface: var(--mint-pale);
   --accent-strong: var(--mint-deep);
+  --accent-hover: var(--mint-hover);
+  --accent-strong-hover: var(--mint-deepest);
+  --surface-hover: var(--mint-tint-deep);
+  --chrome-hover: var(--n200);
   --focus-ring: var(--mint-deep);
   --hatch-line: var(--n400);
   --shadow-color: var(--n900);
@@ -256,8 +289,14 @@
   --chrome-border: var(--n400);
 }
 
+/* Zeroing the durations is only half of it now that state changes move things:
+   a transform with a 0ms duration still moves, it just moves instantly. The
+   companion rule in globals.css switches every transform off, leaving the
+   colour and border changes, so state stays legible without motion. */
 @media (prefers-reduced-motion: reduce) {
   :root {
     --motion-fast: 0ms;
+    --motion-press: 0ms;
+    --motion-sweep: 0ms;
   }
 }

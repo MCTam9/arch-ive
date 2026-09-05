@@ -3,7 +3,7 @@ import { listFrameworks, getMatrixDocuments, getMatrix } from "@/lib/queries";
 import { href } from "@/lib/links";
 import Link from "next/link";
 import { Mono } from "@/components/mono";
-import { PageHeader, EmptyState } from "@/components/ui";
+import { Button, PageHeader, EmptyState } from "@/components/ui";
 import { StatusFlag } from "@/components/draft-wrapper";
 
 export const dynamic = "force-dynamic";
@@ -58,8 +58,7 @@ export default async function MatrixPage({
           <select
             name="framework"
             defaultValue={frameworkSlug}
-            className="font-mono"
-            style={{ padding: "var(--s-2)", border: "var(--border-width) solid var(--border-strong)", background: "var(--surface)" }}
+            className="field font-mono"
           >
             {frameworks.map((f) => (
               <option key={f.slug} value={f.slug}>
@@ -76,8 +75,7 @@ export default async function MatrixPage({
             <select
               name="document"
               defaultValue={documentSlug}
-              className="font-mono"
-              style={{ padding: "var(--s-2)", border: "var(--border-width) solid var(--border-strong)", background: "var(--surface)" }}
+              className="field font-mono"
             >
               {documents.map((d) => (
                 <option key={d.slug} value={d.slug}>
@@ -87,21 +85,9 @@ export default async function MatrixPage({
             </select>
           </label>
         )}
-        <button
-          type="submit"
-          className="font-display transition-fast"
-          style={{
-            alignSelf: "flex-end",
-            padding: "var(--s-2) var(--s-3)",
-            background: "var(--accent)",
-            color: "var(--accent-text)",
-            border: "var(--border-width-strong) solid var(--border-strong)",
-            fontSize: "var(--fs-label)",
-            cursor: "pointer",
-          }}
-        >
+        <Button variant="primary" style={{ alignSelf: "flex-end" }}>
           Go
-        </button>
+        </Button>
       </form>
 
       {criteria.length === 0 || levels.length === 0 ? (
@@ -197,10 +183,15 @@ export default async function MatrixPage({
                           <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
                             {cellItems.map((cell) => (
                               <li key={cell.knowledge_item_id}>
+                                {/* `link`, not colour: "inherit" — a cell sits
+                                    on a level band, and an inherited colour
+                                    made the one interactive thing in the table
+                                    indistinguishable from the label beside it
+                                    apart from an underline. */}
                                 <Link
                                   href={`/item/${cell.knowledge_item_id}?from=matrix&ret=${encodeURIComponent(matrixHref)}`}
-                                  className="font-body transition-fast"
-                                  style={{ fontSize: "var(--fs-sm)", color: "inherit", textDecoration: "underline", textUnderlineOffset: "0.2em" }}
+                                  className="link font-body"
+                                  style={{ fontSize: "var(--fs-sm)" }}
                                 >
                                   {cell.statement || cell.target_text}
                                 </Link>

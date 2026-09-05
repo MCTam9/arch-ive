@@ -95,29 +95,25 @@ export default async function ItemPage({
                 plain text. */}
             {item.terms.map((t, i) => {
               const filterable = t.taxonomy_id === "topic" || t.taxonomy_id === "scale" || t.taxonomy_id === "level";
-              const chipStyle = {
-                padding: "var(--s-1) var(--s-2)",
-                border: "var(--border-width) solid var(--border-strong)",
-                fontSize: "var(--fs-sm)",
-                textDecoration: "none" as const,
-                display: "inline-block",
-              };
               const label = (
                 <>
                   <span className="text-muted">{t.taxonomy_id}</span> {t.label}
                 </>
               );
+              // Same class, same geometry; only the element differs. The two
+              // used to be told apart by a background fill alone, which is not
+              // something you can see you are about to click — the hover state
+              // on `a.chip` is now the whole difference.
               return filterable ? (
                 <Link
                   key={i}
                   href={`/?${t.taxonomy_id}=${encodeURIComponent(t.id)}`}
-                  className="font-body transition-fast"
-                  style={{ ...chipStyle, background: "var(--accent-surface)", color: "var(--text)" }}
+                  className="chip chip-filled font-body"
                 >
                   {label}
                 </Link>
               ) : (
-                <span key={i} className="font-body" style={chipStyle}>
+                <span key={i} className="chip font-body">
                   {label}
                 </span>
               );

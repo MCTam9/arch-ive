@@ -29,21 +29,18 @@ export function NavLinks() {
             ? pathname === "/" || pathname.startsWith("/item/")
             : pathname.startsWith(link.href);
         return (
+          // The active treatment used to be this ternary, painted inline. That
+          // is why the nav had no hover: an inline background beats any rule a
+          // stylesheet can write for it. `aria-current` was already here, so
+          // the CSS has an honest hook — `.chrome .tab[aria-current='page']` —
+          // and the state is now expressed once, in one place, for both
+          // assistive technology and the eye. The border stays transparent
+          // rather than absent so nothing shifts a pixel between sections.
           <Link
             key={link.href}
             href={link.href}
             aria-current={active ? "page" : undefined}
-            className="font-display transition-fast"
-            style={{
-              fontSize: "var(--fs-label)",
-              color: active ? "var(--accent-text)" : "var(--chrome-text)",
-              background: active ? "var(--accent)" : "transparent",
-              // The border is always there, transparent when inactive, so the
-              // label does not shift by a pixel as you move between sections.
-              border: `var(--border-width) solid ${active ? "var(--border-strong)" : "transparent"}`,
-              padding: "var(--s-1) var(--s-2)",
-              textDecoration: "none",
-            }}
+            className="tab tab-sm font-display"
           >
             {link.label}
           </Link>

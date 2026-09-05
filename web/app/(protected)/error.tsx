@@ -32,19 +32,10 @@ export default function Error({
           Reference {error.digest}
         </p>
       )}
-      <button
-        type="button"
-        onClick={reset}
-        className="font-display transition-fast"
-        style={{
-          fontSize: "var(--fs-label)",
-          padding: "var(--s-2) var(--s-4)",
-          background: "var(--accent)",
-          color: "var(--accent-text)",
-          border: "var(--border-width-strong) solid var(--border-strong)",
-          cursor: "pointer",
-        }}
-      >
+      {/* Not <Button> from components/ui: this file is a client component and
+          importing a server-side module into it would pull the whole ui module
+          across the boundary. The classes are the same ones. */}
+      <button type="button" onClick={reset} className="btn btn-primary font-display">
         Try again
       </button>
     </div>

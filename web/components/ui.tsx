@@ -102,32 +102,16 @@ export function DataLabel({ children, style }: { children: ReactNode; style?: CS
 
 type ButtonVariant = "primary" | "secondary" | "quiet";
 
-function buttonStyle(variant: ButtonVariant): CSSProperties {
-  const base: CSSProperties = {
-    fontSize: "var(--fs-label)",
-    padding: "var(--s-2) var(--s-4)",
-    border: "var(--border-width) solid var(--border-strong)",
-    cursor: "pointer",
-    textDecoration: "none",
-    display: "inline-block",
-  };
-  if (variant === "primary") {
-    return {
-      ...base,
-      background: "var(--accent)",
-      color: "var(--accent-text)",
-      borderWidth: "var(--border-width-strong)",
-    };
-  }
-  if (variant === "secondary") {
-    return { ...base, background: "transparent", color: "var(--text)" };
-  }
-  return {
-    ...base,
-    background: "transparent",
-    color: "var(--text-muted)",
-    borderStyle: "dashed",
-  };
+/** The class, not a style object — and that distinction is the whole reason
+ *  hover states work now.
+ *
+ *  This used to return an inline CSSProperties object. An inline style beats a
+ *  class selector, so `.btn:hover` in globals.css would have been valid CSS
+ *  that silently lost to `style={{background: …}}` on every button in the app.
+ *  Adding the rules without moving the styling into classes produces a diff
+ *  that reads as a fix and changes nothing on screen. */
+function buttonClass(variant: ButtonVariant): string {
+  return `btn btn-${variant} font-display`;
 }
 
 export function Button({
@@ -141,33 +125,45 @@ export function Button({
   variant?: ButtonVariant;
   type?: "submit" | "button";
   disabled?: boolean;
+  /** Layout only — alignment, width, margin. Anything that paints belongs in
+   *  the variant, or the states stop applying for the reason above. */
   style?: CSSProperties;
 }) {
   return (
-    <button
-      type={type}
-      disabled={disabled}
-      className="font-display transition-fast"
-      style={{ ...buttonStyle(variant), ...style }}
-    >
+    <button type={type} disabled={disabled} className={buttonClass(variant)} style={style}>
       {children}
     </button>
   );
 }
 
 /** A link that looks like a button. Same geometry, so a row of actions does
- *  not step when one of them happens to be navigation. */
+ *  not step when one of them happens to be navigation.
+ *
+ *  `disabled` is spelled aria-disabled here: an <a> can never match
+ *  `button:disabled`, so a ButtonLink was the one control that could look
+ *  disabled, announce itself disabled, and still navigate on click. The CSS
+ *  pairs the attribute with `pointer-events: none`. */
 export function ButtonLink({
   href,
   children,
   variant = "secondary",
+  disabled,
+  style,
 }: {
   href: string;
   children: ReactNode;
   variant?: ButtonVariant;
+  disabled?: boolean;
+  style?: CSSProperties;
 }) {
   return (
-    <Link href={href} className="font-display transition-fast" style={buttonStyle(variant)}>
+    <Link
+      href={href}
+      className={buttonClass(variant)}
+      aria-disabled={disabled || undefined}
+      tabIndex={disabled ? -1 : undefined}
+      style={style}
+    >
       {children}
     </Link>
   );

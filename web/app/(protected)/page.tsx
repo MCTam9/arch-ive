@@ -11,7 +11,7 @@ import {
 } from "@/lib/queries";
 import { href, browseParams } from "@/lib/links";
 import { Mono, CiteRef } from "@/components/mono";
-import { DataLabel, EmptyState } from "@/components/ui";
+import { Button, DataLabel, EmptyState } from "@/components/ui";
 import { StatusFlag } from "@/components/draft-wrapper";
 
 export const dynamic = "force-dynamic";
@@ -98,8 +98,7 @@ export default async function BrowsePage({
               name="q"
               defaultValue={sp.q}
               placeholder="e.g. embodied carbon"
-              className="font-body"
-              style={{ padding: "var(--s-2)", border: "var(--border-width) solid var(--chrome-border)" }}
+              className="field font-body"
             />
           </label>
 
@@ -123,20 +122,7 @@ export default async function BrowsePage({
           <FacetSelect name="scale" label="Scale" value={sp.scale} options={toOptions(facets.scales)} />
           <FacetSelect name="level" label="Level" value={sp.level} options={toOptions(facets.levels)} />
 
-          <button
-            type="submit"
-            className="font-display transition-fast"
-            style={{
-              padding: "var(--s-2) var(--s-4)",
-              background: "var(--accent)",
-              color: "var(--accent-text)",
-              border: "var(--border-width-strong) solid var(--border-strong)",
-              fontSize: "var(--fs-label)",
-              cursor: "pointer",
-            }}
-          >
-            Apply
-          </button>
+          <Button variant="primary">Apply</Button>
         </form>
       </aside>
 
@@ -175,18 +161,14 @@ export default async function BrowsePage({
               <Link
                 key={chip.key}
                 href={withFilters({ [chip.key]: undefined, offset: undefined })}
-                className="font-mono transition-fast"
+                className="chip chip-filled font-mono"
                 title={`Remove ${chip.key.replace(/_/g, " ")} filter`}
-                style={{
-                  fontSize: "var(--fs-sm)",
-                  padding: "var(--s-1) var(--s-2)",
-                  border: "var(--border-width) solid var(--border-strong)",
-                  background: "var(--accent-surface)",
-                  color: "var(--text)",
-                  textDecoration: "none",
-                }}
               >
-                {chip.label} <span aria-hidden="true">×</span>
+                {/* .chip-x holds the × back until the chip is hovered, so the
+                    remove affordance appears at the moment it becomes true.
+                    Before, the × was permanently at full strength on something
+                    that gave no other sign of being clickable. */}
+                {chip.label} <span className="chip-x" aria-hidden="true">×</span>
               </Link>
             ))}
             <Link href="/" className="font-mono link" style={{ fontSize: "var(--fs-sm)" }}>
@@ -208,7 +190,7 @@ export default async function BrowsePage({
           <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "var(--s-3)" }}>
             {items.map((item) => (
               <li key={item.id}>
-                <Link href={`/item/${item.id}?from=browse&ret=${encodeURIComponent(withFilters({}))}`} className="card card-link transition-fast" style={{ padding: "var(--s-4)" }}>
+                <Link href={`/item/${item.id}?from=browse&ret=${encodeURIComponent(withFilters({}))}`} className="card card-link" style={{ padding: "var(--s-4)" }}>
                   <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "center", marginBottom: "var(--s-2)" }}>
                     <DataLabel>{item.item_type.replace(/_/g, " ")}</DataLabel>
                     <StatusFlag status={item.content_status} />
@@ -303,12 +285,7 @@ function FacetSelect({
       <span className="font-display" style={{ fontSize: "var(--fs-label)" }}>
         {label}
       </span>
-      <select
-        name={name}
-        defaultValue={value ?? ""}
-        className="font-mono"
-        style={{ padding: "var(--s-2)", border: "var(--border-width) solid var(--chrome-border)" }}
-      >
+      <select name={name} defaultValue={value ?? ""} className="field font-mono">
         <option value="">all</option>
         {options.map((o) => (
           <option key={o.value} value={o.value}>

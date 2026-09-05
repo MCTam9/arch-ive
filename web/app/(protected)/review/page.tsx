@@ -3,7 +3,7 @@ import { requireSession } from "@/lib/session";
 import { listReviewQueue, recordReview, REVIEW_STATUSES, type ReviewFilter } from "@/lib/queries";
 import { DraftWrapper } from "@/components/draft-wrapper";
 import { PageScan } from "@/components/page-scan";
-import { DataLabel, PageHeader, EmptyState } from "@/components/ui";
+import { Button, DataLabel, PageHeader, EmptyState } from "@/components/ui";
 import { CiteRef } from "@/components/mono";
 import { revalidatePath } from "next/cache";
 
@@ -61,20 +61,18 @@ export default async function ReviewPage({
       {/* The page scan renders only on this view, so a decided item has to
           stay reachable — otherwise approving something is also the act of
           hiding the evidence it was approved against. */}
-      <nav style={{ display: "flex", gap: "var(--s-2)", marginBottom: "var(--s-5)" }}>
+      {/* aria-current does two jobs at once here: it is how a screen reader is
+          told which tab is selected — which nothing did before — and it is the
+          hook `.tab[aria-current='page']` hangs the selected styling off, so
+          the state is expressed once instead of as an inline ternary a hover
+          rule could never override. */}
+      <nav aria-label="Review status" style={{ display: "flex", gap: "var(--s-2)", marginBottom: "var(--s-5)" }}>
         {REVIEW_STATUSES.map((s) => (
           <Link
             key={s}
             href={s === "pending" ? href({ status: undefined, offset: undefined }) : `/review?${new URLSearchParams({ ...(sp.document ? { document: sp.document } : {}), status: s })}`}
-            className="font-display transition-fast"
-            style={{
-              padding: "var(--s-2) var(--s-3)",
-              fontSize: "var(--fs-label)",
-              textDecoration: "none",
-              border: "var(--border-width) solid var(--border-strong)",
-              background: s === status ? "var(--accent)" : "transparent",
-              color: s === status ? "var(--accent-text)" : "var(--text)",
-            }}
+            aria-current={s === status ? "page" : undefined}
+            className="tab font-display"
           >
             {s}
           </Link>
@@ -127,30 +125,27 @@ export default async function ReviewPage({
                     <form action={decide}>
                       <input type="hidden" name="id" value={it.id} />
                       <input type="hidden" name="decision" value="approved" />
-                      <button type="submit" className="font-display transition-fast" disabled={!canReview}
-                        style={{ padding: "var(--s-2) var(--s-4)", background: "var(--accent)", color: "var(--accent-text)", border: "var(--border-width) solid var(--border-strong)" }}>
+                      <Button variant="primary" disabled={!canReview}>
                         Approve
-                      </button>
+                      </Button>
                     </form>
                   )}
                   {it.review_status !== "rejected" && (
                     <form action={decide}>
                       <input type="hidden" name="id" value={it.id} />
                       <input type="hidden" name="decision" value="rejected" />
-                      <button type="submit" className="font-display transition-fast" disabled={!canReview}
-                        style={{ padding: "var(--s-2) var(--s-4)", background: "transparent", color: "var(--text)", border: "var(--border-width) solid var(--border-strong)" }}>
+                      <Button variant="secondary" disabled={!canReview}>
                         Reject
-                      </button>
+                      </Button>
                     </form>
                   )}
                   {it.review_status !== "pending" && (
                     <form action={decide}>
                       <input type="hidden" name="id" value={it.id} />
                       <input type="hidden" name="decision" value="pending" />
-                      <button type="submit" className="font-display transition-fast" disabled={!canReview}
-                        style={{ padding: "var(--s-2) var(--s-4)", background: "transparent", color: "var(--text-muted)", border: "var(--border-width) dashed var(--border-strong)" }}>
+                      <Button variant="quiet" disabled={!canReview}>
                         Reopen
-                      </button>
+                      </Button>
                     </form>
                   )}
                   {/* Carries where it came from, so "back" returns to this
@@ -182,12 +177,15 @@ export default async function ReviewPage({
         </ul>
       )}
 
-      <nav style={{ display: "flex", gap: "var(--s-4)", marginTop: "var(--s-6)" }}>
+      {/* `link` was missing on both of these, so review's pagination rendered
+          in body colour with the browser's default underline while browse's
+          carried the accent — the same control, two appearances. */}
+      <nav aria-label="Pages" style={{ display: "flex", gap: "var(--s-4)", marginTop: "var(--s-6)" }}>
         {offset > 0 && (
-          <Link className="font-mono" href={href({ offset: Math.max(0, offset - 25) })}>&larr; previous</Link>
+          <Link className="font-mono link" href={href({ offset: Math.max(0, offset - 25) })}>&larr; previous</Link>
         )}
         {offset + items.length < total && (
-          <Link className="font-mono" href={href({ offset: offset + 25 })}>next &rarr;</Link>
+          <Link className="font-mono link" href={href({ offset: offset + 25 })}>next &rarr;</Link>
         )}
       </nav>
     </div>

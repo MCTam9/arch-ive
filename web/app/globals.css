@@ -107,12 +107,26 @@ textarea {
   border-color: var(--chrome-border);
 }
 
-/* ── Rule 2: hover/state transitions only, ≤120ms, honour reduced motion ── */
-.transition-fast {
-  transition-duration: var(--motion-fast);
-  transition-timing-function: var(--motion-ease);
-  transition-property: background-color, border-color, color, box-shadow, opacity;
-}
+/* ── Rule 2 (amended): state transitions only — hover, focus, active. Never
+   scroll-driven, never on load. ≤160ms. Movement is mechanical: whole pixels
+   along the shadow axis, never scale, never opacity fades. Reduced motion
+   removes the movement and keeps the state.
+
+   It previously read "≤120ms" and named no gesture, on the reasoning that the
+   quieter the motion the safer. The result was an interface with exactly one
+   working hover rule in it, and controls that gave no sign they had been
+   clicked. The amendment adds the press — an object that casts a hard offset
+   shadow travels into it when pushed — because that is the one gesture this
+   design language already implies and was not spending. It is deliberately not
+   a licence for fades, lifts or scroll effects: those belong to a different
+   visual world than square corners and a bitmap face.
+
+   `.transition-fast` used to live here as a utility class. It is gone: it was
+   applied to eighteen elements, animated nothing on any of them because no
+   state rule existed to animate, and survived two passes over this file
+   looking like the motion system. The transition now belongs to the control
+   classes themselves, further down, where the states are.
+   ------------------------------------------------------------------------ */
 
 /* ── hard offset shadow, the letterpress signature ─────────────────────── */
 .shadow-hard {
@@ -226,10 +240,246 @@ textarea {
   border: var(--border-width) solid var(--border);
 }
 
-/* ── interaction ────────────────────────────────────────────────────────
-   .transition-fast was applied to a dozen elements and animated nothing,
-   because the stylesheet had no :hover, :active or :disabled rule at all. A
-   result row that is a link has to look like one. */
+/* ══ interaction ═══════════════════════════════════════════════════════════
+   Everything below exists because of one structural fact: an inline style
+   attribute beats a class selector. Every control in this app was styled with
+   an inline object, so a `:hover` rule added on top of that is valid CSS that
+   silently does nothing — which is how the app came to have thirty
+   interactive elements and one working hover state, and why the fix is
+   classes rather than more rules. `.card-link` worked precisely because it
+   was the one control taking its border and shadow from a class.
+
+   The vocabulary is mechanical, taken from the identity tokens.css already
+   describes: square corners, hard offset shadows. A control at rest sits
+   flat. Hovered, it lifts and casts its shadow. Pressed, it travels
+   --press-offset into that shadow while the shadow shortens by the same
+   amount, so the object sinks toward the page instead of sliding across it.
+   Nothing scales, nothing fades. */
+
+.btn,
+.chip,
+.tab,
+.field,
+.card-link,
+.link,
+.skip-link {
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--motion-ease);
+  transition-property: background-color, border-color, color, box-shadow, opacity,
+    transform, text-decoration-thickness, text-underline-offset;
+}
+
+/* ── buttons ──────────────────────────────────────────────────────────────
+   One geometry, three weights. There were six paddings for this control. */
+.btn {
+  display: inline-block;
+  font-size: var(--fs-label);
+  padding: var(--s-2) var(--s-4);
+  border: var(--border-width) solid var(--border-strong);
+  background: transparent;
+  color: var(--text);
+  text-decoration: none;
+  cursor: pointer;
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-width: var(--border-width-strong);
+}
+.btn-quiet {
+  color: var(--text-muted);
+  border-style: dashed;
+}
+/* Rail furniture. The nav's controls sit beside 12px labels, so the content
+   padding would make the header a third taller for no gain. */
+.btn-sm {
+  padding: var(--s-1) var(--s-2);
+}
+
+.btn:hover,
+.btn:focus-visible {
+  box-shadow: var(--shadow-hard);
+}
+.btn-primary:hover,
+.btn-primary:focus-visible {
+  background: var(--accent-hover);
+}
+.btn-secondary:hover,
+.btn-quiet:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.btn:active:not(:disabled):not([aria-disabled='true']) {
+  transform: translate(var(--press-offset), var(--press-offset));
+  box-shadow: var(--shadow-hard-press);
+  transition-duration: var(--motion-press);
+}
+
+/* In the chrome rail a button is furniture, so it takes the chrome palette
+   rather than the content one — but only the two variants that HAVE no palette
+   of their own. Written as `.chrome .btn` this outranks `.btn-primary` on
+   specificity and repaints it: the Apply button in the filter rail would keep
+   its mint fill and take chrome's text colour, which in dark mode is near-white
+   on mint. A primary button means the same thing everywhere and carries its own
+   colours into the rail. */
+.chrome .btn-secondary,
+.chrome .btn-quiet {
+  color: var(--chrome-text);
+  border-color: var(--chrome-border);
+}
+.chrome .btn-secondary:hover,
+.chrome .btn-quiet:hover {
+  background: var(--chrome-hover);
+  color: var(--chrome-text);
+}
+
+/* A disabled control must not look like an enabled one. The review buttons
+   were rendered disabled for readers with an unchanged accent fill. The
+   attribute half matters because ButtonLink renders an <a>, which can never
+   match button:disabled — it was the one control that could look disabled,
+   be disabled to a reader, and still navigate. */
+button:disabled,
+.btn[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: grayscale(1);
+}
+.btn[aria-disabled='true'] {
+  pointer-events: none;
+}
+
+/* ── chips ────────────────────────────────────────────────────────────────
+   Two of these look identical and only one is a link: the browse filter chips
+   navigate, the item's non-filterable facets do not. Until now the only
+   difference was a background fill, which is not something you can see you
+   are about to click. */
+.chip {
+  display: inline-block;
+  padding: var(--s-1) var(--s-2);
+  border: var(--border-width) solid var(--border-strong);
+  font-size: var(--fs-sm);
+  background: transparent;
+  color: var(--text);
+  text-decoration: none;
+}
+.chip-filled {
+  background: var(--accent-surface);
+}
+a.chip {
+  cursor: pointer;
+}
+a.chip:hover,
+a.chip:focus-visible {
+  background: var(--accent);
+  color: var(--accent-text);
+  box-shadow: var(--shadow-hard-press);
+}
+a.chip:active {
+  transform: translate(var(--press-offset), var(--press-offset));
+  box-shadow: none;
+  transition-duration: var(--motion-press);
+}
+/* The × on a removable filter chip. Dim at rest so the chip reads as a label,
+   full strength once you are on it, so the affordance appears exactly when it
+   becomes true. */
+.chip-x {
+  opacity: 0.55;
+}
+a.chip:hover .chip-x,
+a.chip:focus-visible .chip-x {
+  opacity: 1;
+}
+
+/* ── tabs and nav links ─────────────────────────────────────────────────── */
+.tab {
+  display: inline-block;
+  padding: var(--s-2) var(--s-3);
+  font-size: var(--fs-label);
+  border: var(--border-width) solid var(--border-strong);
+  background: transparent;
+  color: var(--text);
+  text-decoration: none;
+  cursor: pointer;
+}
+.tab-sm {
+  padding: var(--s-1) var(--s-2);
+}
+.tab:hover {
+  background: var(--accent-surface);
+}
+.tab[aria-current='page'] {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+.tab[aria-current='page']:hover {
+  background: var(--accent-hover);
+}
+.tab:active {
+  transform: translate(var(--press-offset), var(--press-offset));
+  transition-duration: var(--motion-press);
+}
+
+/* In the rail the tabs carry no border until you reach for one, so the header
+   reads as a row of words rather than a row of boxes. The :hover on the
+   current page needs the full four-class selector or the chrome hover wins on
+   specificity and the active item loses its accent mid-hover. */
+.chrome .tab {
+  color: var(--chrome-text);
+  border-color: transparent;
+}
+.chrome .tab:hover {
+  background: var(--chrome-hover);
+  border-color: var(--chrome-border);
+}
+.chrome .tab[aria-current='page'] {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--border-strong);
+}
+.chrome .tab[aria-current='page']:hover {
+  background: var(--accent-hover);
+  border-color: var(--border-strong);
+}
+
+/* ── form fields ──────────────────────────────────────────────────────────
+   .chrome select/input above still sets the palette for controls in the rail;
+   these rules are one class heavier, so the states apply in both places. */
+.field {
+  padding: var(--s-2);
+  border: var(--border-width) solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+.field:hover {
+  border-color: var(--accent-strong);
+}
+.field:focus,
+.field:focus-visible {
+  border-color: var(--accent-strong);
+  box-shadow: var(--shadow-hard-press);
+}
+
+/* ── text links ───────────────────────────────────────────────────────────
+   The rule thickens and pulls up into the word rather than fading in, which
+   is the same mechanical gesture as the press. It keeps an underline at rest:
+   colour alone is not an affordance. */
+.link {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+.link:hover,
+.link:focus-visible {
+  color: var(--accent-strong-hover);
+  text-decoration-thickness: 3px;
+  text-underline-offset: 0.12em;
+}
+
+/* ── cards that are links ────────────────────────────────────────────────
+   A result row that is a link has to look like one. It lifts toward the light
+   on hover — the opposite direction to the shadow — and returns flat when
+   pressed, so the click has somewhere to travel. */
 .card-link {
   display: block;
   text-decoration: none;
@@ -239,22 +489,29 @@ textarea {
 .card-link:focus-visible {
   border-color: var(--border-strong);
   box-shadow: var(--shadow-hard);
+  transform: translate(calc(var(--press-offset) * -1), calc(var(--press-offset) * -1));
+}
+.card-link:active {
+  transform: none;
+  box-shadow: var(--shadow-hard-press);
+  transition-duration: var(--motion-press);
 }
 
-/* A disabled control must not look like an enabled one. The review buttons
-   were rendered disabled for readers with an unchanged accent fill. */
-button:disabled,
-button[aria-disabled='true'] {
-  opacity: 0.45;
-  cursor: not-allowed;
-  filter: grayscale(1);
-}
-
-/* Links carry the accent so they read as links; --accent-strong was defined
-   in all four theme blocks and used nowhere. */
-.link {
-  color: var(--accent-strong);
-  text-underline-offset: 0.2em;
+/* ── reduced motion ───────────────────────────────────────────────────────
+   tokens.css zeroes the durations; that alone is not enough, because a
+   transform with a 0ms duration still moves — it just moves instantly. Every
+   colour and border change stays, so no state becomes invisible. The skip
+   link is deliberately absent: its transform is how it is hidden, not how it
+   is animated. */
+@media (prefers-reduced-motion: reduce) {
+  .btn:active,
+  a.chip:active,
+  .tab:active,
+  .card-link:hover,
+  .card-link:focus-visible,
+  .card-link:active {
+    transform: none;
+  }
 }
 
 .text-muted {
@@ -265,16 +522,24 @@ button[aria-disabled='true'] {
   background: var(--surface-sunken);
 }
 
+/* Hidden by transform rather than by left: -9999px, so it can slide into place
+   instead of appearing from off-screen — animating `left` from -9999px would
+   fly the thing across the viewport. It is also the first control a keyboard
+   user meets, so it gets the same border and shadow as everything else rather
+   than the bare fill it had. */
 .skip-link {
   position: absolute;
-  left: -9999px;
-  top: 0;
+  left: var(--s-2);
+  top: var(--s-2);
+  transform: translateY(calc(-100% - var(--s-4)));
   background: var(--accent);
   color: var(--accent-text);
+  border: var(--border-width-strong) solid var(--border-strong);
   padding: var(--s-2) var(--s-3);
   z-index: 100;
 }
-.skip-link:focus {
-  left: var(--s-2);
-  top: var(--s-2);
+.skip-link:focus,
+.skip-link:focus-visible {
+  transform: translateY(0);
+  box-shadow: var(--shadow-hard);
 }

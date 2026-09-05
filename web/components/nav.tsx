@@ -5,12 +5,15 @@ import { ThemeToggle } from "./theme-toggle";
 
 export function Nav({ email }: { email?: string | null }) {
   return (
+    // `chrome` as a class rather than the two inline declarations it replaces:
+    // the descendant rules (.chrome .tab, .chrome .btn) are how the rail's
+    // controls take the chrome palette for their hover and press states, and a
+    // descendant selector needs an ancestor to hang off.
     <header
+      className="chrome"
       style={{
         position: "relative",
         borderBottom: "var(--border-width-strong) solid var(--chrome-border)",
-        background: "var(--chrome-bg)",
-        color: "var(--chrome-text)",
       }}
     >
       <div
@@ -24,7 +27,10 @@ export function Nav({ email }: { email?: string | null }) {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-6)" }}>
-          <Link href="/" className="font-display" style={{ fontSize: "var(--fs-h3)", color: "var(--chrome-text)", textDecoration: "none" }}>
+          {/* The wordmark is a link to the same place as Browse, so it takes
+              the tab treatment but never aria-current — two current markers in
+              one rail is worse than none. */}
+          <Link href="/" className="tab font-display" style={{ fontSize: "var(--fs-h3)" }}>
             arch-ive
           </Link>
           <NavLinks />
@@ -42,18 +48,7 @@ export function Nav({ email }: { email?: string | null }) {
               await signOut({ redirectTo: "/login" });
             }}
           >
-            <button
-              type="submit"
-              className="font-display transition-fast"
-              style={{
-                fontSize: "var(--fs-label)",
-                background: "transparent",
-                border: "var(--border-width) solid var(--chrome-border)",
-                color: "var(--chrome-text)",
-                padding: "var(--s-1) var(--s-2)",
-                cursor: "pointer",
-              }}
-            >
+            <button type="submit" className="btn btn-secondary btn-sm font-display">
               Sign out
             </button>
           </form>

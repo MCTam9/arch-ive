@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { ButtonLink } from "@/components/ui";
 
 // Lives inside (protected) so a bad id renders with the nav still attached.
 // Without this file, notFound() from /item/[id] fell through to Next's stock
@@ -16,9 +16,12 @@ export default function NotFound() {
         are identified by id, so a link from an old note may point at something
         that has since been re-ingested under a new one.
       </p>
-      <Link href="/" className="font-display" style={{ fontSize: "var(--fs-label)" }}>
+      {/* Was the barest link in the app — no class, no state, the browser's
+          default underline in body colour. The one way out of a dead end
+          should look like a way out. */}
+      <ButtonLink href="/" variant="primary">
         Back to browse
-      </Link>
+      </ButtonLink>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { signIn, auth } from "@/auth";
 import { redirect } from "next/navigation";
+import { Button } from "@/components/ui";
 
 export default async function LoginPage({
   searchParams,
@@ -74,21 +75,9 @@ export default async function LoginPage({
             await signIn("google", { redirectTo: "/" });
           }}
         >
-          <button
-            type="submit"
-            className="font-display transition-fast"
-            style={{
-              width: "100%",
-              padding: "var(--s-3)",
-              background: "var(--accent)",
-              color: "var(--accent-text)",
-              border: "var(--border-width-strong) solid var(--border-strong)",
-              fontSize: "var(--fs-label)",
-              cursor: "pointer",
-            }}
-          >
+          <Button variant="primary" style={{ width: "100%", padding: "var(--s-3)" }}>
             Sign in with Google
-          </button>
+          </Button>
         </form>
 
         {devLoginEnabled && (
@@ -105,28 +94,10 @@ export default async function LoginPage({
               type="email"
               placeholder="dev@local"
               required
-              className="font-mono"
-              style={{
-                flex: 1,
-                padding: "var(--s-2)",
-                border: "var(--border-width) solid var(--border-strong)",
-                background: "var(--surface)",
-              }}
+              className="field font-mono"
+              style={{ flex: 1 }}
             />
-            <button
-              type="submit"
-              className="font-display transition-fast"
-              style={{
-                padding: "var(--s-2) var(--s-3)",
-                background: "var(--surface-sunken)",
-                color: "var(--text)",
-                border: "var(--border-width) solid var(--border-strong)",
-                fontSize: "var(--fs-label)",
-                cursor: "pointer",
-              }}
-            >
-              Dev sign-in
-            </button>
+            <Button variant="secondary">Dev sign-in</Button>
           </form>
         )}
       </div>
