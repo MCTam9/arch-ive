@@ -55,6 +55,37 @@ extraction failure can never lose the file.
 - `knowledge_item` rows with subtype payloads, each resolving to a `citation`
   carrying both the PDF page index and the printed page label.
 
+## What a chunk says
+
+A chunk is the unit both legs of search see: `chunk.tsv` is generated from
+`chunk.text`, and `chunk.embedding` is computed from it. Anything not in that
+column is unreachable, however well modelled it is elsewhere.
+
+For most item types the chunk is the item's title and statement, which is the
+whole record. The two typed shapes are different — a benchmark's substance
+lives in `benchmark` (metric, value, unit, building use, target year) and a
+requirement's context lives in the join to `criterion` and `rating_level`. So
+`tools/write_extraction.py` writes the title-and-statement chunk first, then
+calls `tools/refresh_chunk_text.py` to compose the typed facts in.
+
+That is one function with two callers, deliberately: the writer runs it per
+document at ingest, and the CLI runs it over an existing corpus after the
+composer changes.
+
+```sh
+python3 -m tools.refresh_chunk_text                    # dry run, prints before/after
+python3 -m tools.refresh_chunk_text --document crib-water --yes
+python3 -m tools.embed_chunks                          # re-embed what changed
+```
+
+Rewriting a chunk sets its `embedding` to NULL, which is exactly the state
+`tools/embed_chunks.py` resumes from — so the re-embed is always the second
+command and never needs a list of ids. Never leave a stale vector on rewritten
+text: the row stays findable, at coordinates that no longer describe it, with
+nothing to show that it is wrong.
+
+`chunk.tsv` is a generated column and needs no separate step.
+
 ## Edge cases and what to do
 
 - **A large file is picked up mid-copy.** Should not happen: a file is only

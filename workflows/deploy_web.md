@@ -57,11 +57,50 @@ the session **and** that the page belongs to a document the caller's own
 account can see under RLS. The second check is the point: a signed-in reader
 guessing a key must not reach a page from a document RLS would otherwise hide.
 
-**Follow-up worth doing:** the credentials in the Vercel environment are the
-account-scoped R2 token. Mint one in the Cloudflare dashboard scoped to
-*Object Read only* on `arch-ive-pages` and swap it in — the web app never
-writes to this bucket, and it has no business being able to reach the
-originals bucket at all, even as ciphertext.
+### Scoping the token the web app runs on
+
+The web app only reads page renders, so its credentials should do only that.
+They started as the account-scoped R2 token, which can also write this bucket
+and list the originals bucket — those objects are client-side encrypted, but a
+web function still has no business reaching them.
+
+A token swap fails silently in the direction that matters: too little scope
+takes every page render off the site, too much looks perfectly healthy. So it
+is checked in both directions before the value goes near production.
+
+1. Cloudflare dashboard → **R2 → API → Manage API tokens → Create API token**.
+   Permission **Object Read only**, applied to **`arch-ive-pages` only**, not
+   to all buckets. Cloudflare shows the access key id and secret exactly once.
+2. Put the pair in `.tmp/r2-read.env` — gitignored and disposable by
+   CLAUDE.md's definition — as `R2_ACCESS_KEY_ID=` and `R2_SECRET_ACCESS_KEY=`.
+3. Prove it before shipping it:
+   ```sh
+   python3 -m tools.check_r2_token --env-file .tmp/r2-read.env
+   ```
+   Four checks: it can read a real key taken from `source_page`, and it cannot
+   write, delete, or reach the originals bucket. The write and delete checks
+   act on a `_token-check/` probe key, never on a live render — a delete check
+   aimed at a real key would destroy a page the moment it failed the wrong way.
+   Run it with no `--env-file` to audit whatever is configured right now.
+4. Swap it in, reading each value from stdin so it misses shell history:
+   ```sh
+   cd web
+   npx vercel env rm R2_ACCESS_KEY_ID production --yes
+   npx vercel env rm R2_SECRET_ACCESS_KEY production --yes
+   npx vercel env add R2_ACCESS_KEY_ID production      # paste, then Ctrl-D
+   npx vercel env add R2_SECRET_ACCESS_KEY production
+   npx vercel --prod --yes
+   ```
+   Environment variables are read at deploy time, so the redeploy is the step
+   that applies them — changing them alone leaves the old token running.
+5. Confirm against the live site that a signed-in page render still returns
+   image bytes. A 500 from `/api/page-image` after this means the token cannot
+   read; roll back by re-adding the previous pair.
+6. Delete `.tmp/r2-read.env`, and revoke the old token in the dashboard once
+   the site is confirmed working — anything else that uses it
+   (`tools/upload_page_images.py`, `rclone`) reads `.env`, not Vercel, so it is
+   unaffected by the swap but *is* affected by the revocation. Keep the
+   account-scoped token in `.env`; it is the one that still has to write.
 
 ## Document titles
 

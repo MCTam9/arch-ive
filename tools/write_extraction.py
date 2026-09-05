@@ -881,10 +881,21 @@ def write_extraction(conn: psycopg.Connection, document_id: str, extraction: Ext
     page_chunk_count = _write_page_chunks(conn, document_id, covered_pages)
     ref_count = _write_references(conn, document_id, extraction.references, node_ref_map, warnings)
 
+    # A benchmark's chunk is its title alone until the typed row exists, so the
+    # metric, value and unit that make it findable are composed in afterwards --
+    # by the same function tools/refresh_chunk_text.py runs over an existing
+    # corpus, so there is one definition of what a typed chunk says. The
+    # embeddings it clears are NULL already at this point in a fresh ingest;
+    # the EMBEDDED stage runs after this one and picks them up.
+    from tools.refresh_chunk_text import refresh as _refresh_chunk_text
+
+    typed_chunk_count = _refresh_chunk_text(conn, document_id=document_id)
+
     counts = {
         **node_counts,
         **item_counts,
         "chunks_page": page_chunk_count,
+        "chunks_typed": typed_chunk_count,
         "external_references": ref_count,
         "units": unit_count,
         "metrics": metric_count,
