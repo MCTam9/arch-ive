@@ -37,7 +37,7 @@ from psycopg.rows import dict_row
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools import db  # noqa: E402  (all_rows/one/scalar are plain executors, not connection factories)
-from tools.search import _facet_join, search as _hybrid_search  # noqa: E402
+from tools.search import _facet_clauses, search as _hybrid_search  # noqa: E402
 
 READONLY_DEFAULT_DSN = "postgresql://arch_read:dev@localhost:55432/postgres"
 DEFAULT_ACCOUNT = "00000000-0000-0000-0000-0000000000aa"
@@ -146,7 +146,7 @@ def search_knowledge(conn, query: str, *, facets: dict[str, str] | None = None,
     # a separate, simpler code path rather than a flag threaded through
     # tools.search.search -- that function's default (real-only) behaviour
     # must stay the safe default with no way to weaken it by accident.
-    facet_sql, facet_params = _facet_join(facets)
+    facet_sql, facet_params = _facet_clauses(facets)
     rows = db.all_rows(
         conn,
         f"""SELECT c.id AS chunk_id, c.text, c.knowledge_item_id, c.page_from, c.page_to,
@@ -157,13 +157,13 @@ def search_knowledge(conn, query: str, *, facets: dict[str, str] | None = None,
             FROM chunk c
             JOIN knowledge_item ki ON ki.id = c.knowledge_item_id
             JOIN source_document d ON d.id = c.document_id
-            {facet_sql}
             WHERE c.tsv @@ websearch_to_tsquery('english', %s)
               AND ki.review_status <> 'rejected'
               AND (c.page_from IS NOT NULL OR c.page_to IS NOT NULL)
+              {facet_sql}
             ORDER BY ts_rank(c.tsv, websearch_to_tsquery('english', %s)) DESC
             LIMIT %s""",
-        (*facet_params, query, query, limit),
+        (query, *facet_params, query, limit),
     )
     results = []
     for r in rows:

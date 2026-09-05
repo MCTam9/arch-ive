@@ -28,17 +28,31 @@ def _embed_query(text: str) -> str | None:
     return "[" + ",".join(f"{x:.8f}" for x in vec.tolist()) + "]"
 
 
-def _facet_join(facets: dict[str, str] | None) -> tuple[str, list]:
-    """One item_term join per facet value, ANDed -- a result must carry every
-    requested term. `facets` maps an arbitrary label to a taxonomy_term id."""
+def _facet_clauses(facets: dict[str, str] | None) -> tuple[str, list]:
+    """One EXISTS per facet value, ANDed -- a result must carry every requested
+    term. `facets` maps an arbitrary label to a taxonomy_term id.
+
+    A term matches its whole subtree. This was `term_id = %s`, which is exact,
+    so asking for a top-level topic returned only the items tagged on the
+    parent itself and silently dropped everything filed under its children --
+    'Health & Wellbeing' gave 17 of its 53. The taxonomy is an ltree with a
+    GiST index on `path` (db/schema.sql), so `<@` is both correct and cheap.
+    Flat taxonomies are unaffected: their subtree is the term.
+
+    EXISTS rather than the JOIN this used to be, and that is not cosmetic. A
+    join on an exact term id matches at most one row per item, but a join on a
+    subtree matches one row per descendant term -- which would multiply chunks
+    in the result and quietly corrupt the RRF ranking below."""
     if not facets:
         return "", []
     clauses = []
     params: list = []
-    for i, term_id in enumerate(facets.values()):
-        alias = f"ft{i}"
+    for term_id in facets.values():
         clauses.append(
-            f"JOIN item_term {alias} ON {alias}.knowledge_item_id = ki.id AND {alias}.term_id = %s"
+            "AND EXISTS (SELECT 1 FROM item_term it"
+            "  JOIN taxonomy_term tt ON tt.id = it.term_id"
+            " WHERE it.knowledge_item_id = ki.id"
+            "   AND tt.path <@ (SELECT path FROM taxonomy_term WHERE id = %s))"
         )
         params.append(term_id)
     return " ".join(clauses), params
@@ -51,7 +65,7 @@ def search(conn, query: str, *, facets: dict[str, str] | None = None, limit: int
     content should never masquerade as a real answer). Every row carries
     document_slug + page_index (its citation) alongside the chunk text.
     """
-    facet_sql, facet_params = _facet_join(facets)
+    facet_sql, facet_params = _facet_clauses(facets)
 
     fts_rows = db.all_rows(
         conn,
@@ -59,13 +73,13 @@ def search(conn, query: str, *, facets: dict[str, str] | None = None, limit: int
                    row_number() OVER (ORDER BY ts_rank(c.tsv, websearch_to_tsquery('english', %s)) DESC) AS rnk
             FROM chunk c
             JOIN knowledge_item ki ON ki.id = c.knowledge_item_id
-            {facet_sql}
             WHERE c.tsv @@ websearch_to_tsquery('english', %s)
               AND c.content_status = 'real' AND ki.content_status = 'real'
               AND ki.review_status <> 'rejected'
+              {facet_sql}
             ORDER BY rnk
             LIMIT 200""",
-        (query, *facet_params, query),
+        (query, query, *facet_params),
     )
 
     vec_rows = []
@@ -77,10 +91,10 @@ def search(conn, query: str, *, facets: dict[str, str] | None = None, limit: int
                        row_number() OVER (ORDER BY c.embedding <=> %s::vector) AS rnk
                 FROM chunk c
                 JOIN knowledge_item ki ON ki.id = c.knowledge_item_id
-                {facet_sql}
                 WHERE c.embedding IS NOT NULL
                   AND c.content_status = 'real' AND ki.content_status = 'real'
                   AND ki.review_status <> 'rejected'
+                  {facet_sql}
                 ORDER BY rnk
                 LIMIT 200""",
             (embedding, *facet_params),
