@@ -4,10 +4,11 @@ import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/session";
 import { getKnowledgeItem } from "@/lib/queries";
 import { backLink } from "@/lib/links";
-import { Mono } from "@/components/mono";
+import { Mono, CiteRef } from "@/components/mono";
 import { DraftWrapper } from "@/components/draft-wrapper";
 import { LevelBadge } from "@/components/level-badge";
 import { PageScan } from "@/components/page-scan";
+import { DataLabel, Section } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -36,9 +37,7 @@ export default async function ItemPage({
       </Link>
 
       <div style={{ display: "flex", alignItems: "center", gap: "var(--s-3)", margin: "var(--s-3) 0 var(--s-1) 0", flexWrap: "wrap" }}>
-        <span className="font-mono text-muted" style={{ fontSize: "var(--fs-micro)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-          {item.item_type.replace(/_/g, " ")}
-        </span>
+        <DataLabel>{item.item_type.replace(/_/g, " ")}</DataLabel>
         <Link href={`/?document=${encodeURIComponent(item.document_slug)}`} className="font-mono link" style={{ fontSize: "var(--fs-sm)" }}>
           {item.document_title ?? item.document_slug}
         </Link>
@@ -134,11 +133,11 @@ export default async function ItemPage({
           <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
             {item.citations.map((c, i) => (
               <li key={i} style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
-                <span className="font-mono" style={{ fontSize: "var(--fs-sm)" }}>
-                  {c.document_slug}
-                  {c.page_index != null && ` · pdf p${c.page_index}`}
-                  {c.printed_page_label && ` · printed p${c.printed_page_label}`}
-                </span>
+                <CiteRef
+                  documentSlug={c.document_title ?? c.document_slug}
+                  pageIndex={c.page_index}
+                  printedPageLabel={c.printed_page_label}
+                />
                 {/* The page this record came from. */}
                 <PageScan
                   imageKey={c.page_image_key}
@@ -158,25 +157,6 @@ export default async function ItemPage({
         Node: {item.node_code ?? "—"} {item.node_title ?? ""} · review: {item.review_status}
       </p>
     </div>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section style={{ marginTop: "var(--s-8)" }}>
-      <h2
-        className="font-display"
-        style={{
-          fontSize: "var(--fs-label)",
-          borderBottom: "var(--border-width) solid var(--border)",
-          paddingBottom: "var(--s-2)",
-          marginBottom: "var(--s-3)",
-        }}
-      >
-        {title}
-      </h2>
-      {children}
-    </section>
   );
 }
 
@@ -250,9 +230,7 @@ function PayloadTable({ itemType, payload }: { itemType: string; payload: Record
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <>
-      <span className="font-display" style={{ fontSize: "var(--fs-micro)", color: "var(--text-muted)", alignSelf: "center" }}>
-        {label}
-      </span>
+      <DataLabel style={{ alignSelf: "center" }}>{label}</DataLabel>
       <div>{children}</div>
     </>
   );

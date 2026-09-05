@@ -11,6 +11,7 @@ import {
 } from "@/lib/queries";
 import { href, browseParams } from "@/lib/links";
 import { Mono, CiteRef } from "@/components/mono";
+import { DataLabel, EmptyState } from "@/components/ui";
 import { StatusFlag } from "@/components/draft-wrapper";
 
 export const dynamic = "force-dynamic";
@@ -195,16 +196,21 @@ export default async function BrowsePage({
         )}
 
         {items.length === 0 ? (
-          <EmptyState hasFilters={chips.length > 0} />
+          <EmptyState
+            title="No matching records"
+            action={chips.length > 0 ? { href: "/", label: "Clear all filters" } : undefined}
+          >
+            {chips.length > 0
+              ? "Filters combine with AND, so a narrow topic and a specific document together can easily match nothing. Remove one and try again."
+              : "Nothing in the corpus matches. If this is unexpected, the enrichment stage that tags items with topic, scale and level may not have run for the newest documents."}
+          </EmptyState>
         ) : (
           <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "var(--s-3)" }}>
             {items.map((item) => (
               <li key={item.id}>
                 <Link href={`/item/${item.id}?from=browse&ret=${encodeURIComponent(withFilters({}))}`} className="card card-link transition-fast" style={{ padding: "var(--s-4)" }}>
                   <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "center", marginBottom: "var(--s-2)" }}>
-                    <span className="font-mono text-muted" style={{ fontSize: "var(--fs-micro)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                      {item.item_type.replace(/_/g, " ")}
-                    </span>
+                    <DataLabel>{item.item_type.replace(/_/g, " ")}</DataLabel>
                     <StatusFlag status={item.content_status} />
                   </div>
                   <p className="font-body" style={{ margin: 0, fontWeight: 600 }}>
@@ -312,27 +318,5 @@ function FacetSelect({
         ))}
       </select>
     </label>
-  );
-}
-
-function EmptyState({ hasFilters }: { hasFilters: boolean }) {
-  return (
-    <div className="card" style={{ padding: "var(--s-10)", textAlign: "center" }}>
-      <h2 className="font-display" style={{ fontSize: "var(--fs-h3)", margin: "0 0 var(--s-3)" }}>
-        No matching records
-      </h2>
-      <p className="font-body text-muted" style={{ margin: "0 auto", maxWidth: "52ch" }}>
-        {hasFilters
-          ? "Filters combine with AND, so a narrow topic and a specific document together can easily match nothing. Remove one and try again."
-          : "Nothing in the corpus matches. If this is unexpected, the enrichment stage that tags items with topic, scale and level may not have run for the newest documents."}
-      </p>
-      {hasFilters && (
-        <p style={{ marginTop: "var(--s-4)", marginBottom: 0 }}>
-          <Link href="/" className="font-display link" style={{ fontSize: "var(--fs-label)" }}>
-            Clear all filters
-          </Link>
-        </p>
-      )}
-    </div>
   );
 }

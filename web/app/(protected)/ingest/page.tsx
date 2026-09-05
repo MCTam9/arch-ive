@@ -1,6 +1,7 @@
 import { requireSession } from "@/lib/session";
 import { listIngestJobs } from "@/lib/queries";
 import { Mono } from "@/components/mono";
+import { EmptyState, PageHeader } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -19,15 +20,20 @@ export default async function IngestPage() {
 
   return (
     <div style={{ padding: "var(--s-6)" }}>
-      <h1 className="font-display" style={{ fontSize: "var(--fs-h1)", margin: "0 0 var(--s-2) 0" }}>
-        Ingest
-      </h1>
-      <p className="text-muted font-body" style={{ marginBottom: "var(--s-6)" }}>
-        {jobs.length} job{jobs.length === 1 ? "" : "s"} · {jobs.filter((j) => !TERMINAL_STATES.has(j.state)).length} in flight
-      </p>
+      <PageHeader
+        title="Ingest"
+        meta={`${jobs.length} job${jobs.length === 1 ? "" : "s"} · ${jobs.filter((j) => !TERMINAL_STATES.has(j.state)).length} in flight`}
+      >
+        What has come through the <code>inbox/</code> folder. Documents loaded through the
+        tools directly have no job here.
+      </PageHeader>
 
       {jobs.length === 0 ? (
-        <p className="font-body text-muted">No ingest jobs recorded.</p>
+        <EmptyState title="No ingest jobs">
+          This view describes what came through the <code>inbox/</code> folder. The corpus was
+          loaded through the tools directly, so those documents have no job rows and never
+          appear here.
+        </EmptyState>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
           {jobs.map((job) => {
@@ -129,18 +135,29 @@ export default async function IngestPage() {
 }
 
 function StateChip({ state }: { state: string }) {
-  const bg = state === "done" ? "var(--level-3)" : state === "failed" ? "var(--level-2)" : state === "needs_review" ? "var(--n500)" : "var(--n400)";
+  // The band colours are a fill that takes near-black text — that is what
+  // --level-N-text is for, and the raw ramp values used here before did not
+  // follow the theme. `done` and `failed` keep a band colour because they are
+  // the two states worth spotting from across the list; everything else is a
+  // neutral surface rather than another colour competing with them.
+  const styles: Record<string, { background: string; color: string }> = {
+    done: { background: "var(--level-3)", color: "var(--level-3-text)" },
+    failed: { background: "var(--level-2)", color: "var(--level-2-text)" },
+  };
+  const tone = styles[state] ?? { background: "var(--surface-sunken)", color: "var(--text)" };
   return (
+    // Mono, not the display face: `needs_review` rendered as NEEDS_REVIEW, and
+    // these are enum values, not chrome.
     <span
-      className="font-display"
+      className="font-mono"
       style={{
         fontSize: "var(--fs-micro)",
         padding: "var(--s-1) var(--s-2)",
-        background: bg,
-        color: "var(--n900)",
+        border: "var(--border-width) solid var(--border)",
+        ...tone,
       }}
     >
-      {state}
+      {state.replace(/_/g, " ")}
     </span>
   );
 }

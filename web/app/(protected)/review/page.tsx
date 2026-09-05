@@ -3,6 +3,8 @@ import { requireSession } from "@/lib/session";
 import { listReviewQueue, recordReview, REVIEW_STATUSES, type ReviewFilter } from "@/lib/queries";
 import { DraftWrapper } from "@/components/draft-wrapper";
 import { PageScan } from "@/components/page-scan";
+import { DataLabel, PageHeader, EmptyState } from "@/components/ui";
+import { CiteRef } from "@/components/mono";
 import { revalidatePath } from "next/cache";
 
 export const dynamic = "force-dynamic";
@@ -54,10 +56,7 @@ export default async function ReviewPage({
 
   return (
     <div style={{ padding: "var(--s-6)", maxWidth: 1400, margin: "0 auto" }}>
-      <header style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "var(--s-6)" }}>
-        <h1 className="font-display" style={{ fontSize: "var(--fs-h1)", margin: 0 }}>Review</h1>
-        <span className="font-mono text-muted">{total} {status === "all" ? "total" : status}</span>
-      </header>
+      <PageHeader title="Review" meta={`${total} ${status === "all" ? "total" : status}`} />
 
       {/* The page scan renders only on this view, so a decided item has to
           stay reachable — otherwise approving something is also the act of
@@ -89,34 +88,37 @@ export default async function ReviewPage({
       )}
 
       {items.length === 0 ? (
-        <p className="font-body text-muted">
+        <EmptyState title={status === "pending" ? "Nothing pending" : `No ${status} records`}>
           {status === "pending"
-            ? "Nothing pending. Every extracted record has been decided — the approved tab still shows each record beside its page scan."
-            : `No ${status} records.`}
-        </p>
+            ? "Every extracted record has been decided. The approved tab still shows each one beside its page scan."
+            : "Nothing has been given this status yet."}
+        </EmptyState>
       ) : (
         <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "var(--s-6)" }}>
           {items.map((it, i) => (
             <li key={it.id} className="card" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 420px", gap: "var(--s-4)", padding: "var(--s-4)" }}>
               <div style={{ minWidth: 0 }}>
-                <div className="font-display" style={{ fontSize: "var(--fs-micro)", marginBottom: "var(--s-2)" }}>
-                  {it.item_type}
-                  {it.extraction_confidence != null && (
-                    <span className="font-mono text-muted"> · confidence {Number(it.extraction_confidence).toFixed(2)}</span>
-                  )}
-                  {it.review_status !== "pending" && (
-                    <span className="font-mono text-muted"> · {it.review_status}</span>
-                  )}
+                {/* Was the bitmap face at 10px, which both broke the 12px
+                    floor and shouted PROCESS_STEP at an enum value. */}
+                <div style={{ marginBottom: "var(--s-2)" }}>
+                  <DataLabel>
+                    {it.item_type.replace(/_/g, " ")}
+                    {it.extraction_confidence != null &&
+                      ` · confidence ${Number(it.extraction_confidence).toFixed(2)}`}
+                    {it.review_status !== "pending" && ` · ${it.review_status}`}
+                  </DataLabel>
                 </div>
                 <DraftWrapper status={it.content_status}>
                   {it.title && <p className="font-mono" style={{ margin: "0 0 var(--s-2)" }}>{it.title}</p>}
                   <p className="font-body" style={{ margin: 0 }}>{it.statement}</p>
                 </DraftWrapper>
-                <p className="font-mono text-muted" style={{ fontSize: "var(--fs-sm)", marginTop: "var(--s-3)" }}>
-                  {it.document_slug}
-                  {it.page_index != null && ` · pdf p${it.page_index}`}
-                  {it.printed_page_label && ` · printed ${it.printed_page_label}`}
-                </p>
+                <div style={{ marginTop: "var(--s-3)" }}>
+                  <CiteRef
+                    documentSlug={it.document_title ?? it.document_slug}
+                    pageIndex={it.page_index}
+                    printedPageLabel={it.printed_page_label}
+                  />
+                </div>
                 <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)" }}>
                   {/* Only offer the decisions that would change something.
                       An Approve button on an already-approved record invites a

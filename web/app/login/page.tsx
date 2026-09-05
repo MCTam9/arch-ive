@@ -22,7 +22,7 @@ export default async function LoginPage({
         minHeight: "100dvh",
         display: "grid",
         placeItems: "center",
-        background: "var(--n900)",
+        background: "var(--bg)",
       }}
     >
       <div
@@ -31,7 +31,7 @@ export default async function LoginPage({
           position: "relative",
           width: "min(420px, 90vw)",
           padding: "var(--s-8)",
-          background: "var(--n100)",
+          background: "var(--surface)",
         }}
       >
         <h1
@@ -40,7 +40,7 @@ export default async function LoginPage({
             fontSize: "var(--fs-h1)",
             // the strapline under this used to carry the gap to the button
             margin: "0 0 var(--s-6)",
-            color: "var(--n900)",
+            color: "var(--text)",
           }}
         >
           arch-ive
@@ -82,7 +82,7 @@ export default async function LoginPage({
               padding: "var(--s-3)",
               background: "var(--accent)",
               color: "var(--accent-text)",
-              border: "var(--border-width-strong) solid var(--n900)",
+              border: "var(--border-width-strong) solid var(--border-strong)",
               fontSize: "var(--fs-label)",
               cursor: "pointer",
             }}
@@ -109,7 +109,7 @@ export default async function LoginPage({
               style={{
                 flex: 1,
                 padding: "var(--s-2)",
-                border: "var(--border-width) solid var(--n900)",
+                border: "var(--border-width) solid var(--border-strong)",
                 background: "var(--surface)",
               }}
             />
@@ -118,9 +118,9 @@ export default async function LoginPage({
               className="font-display transition-fast"
               style={{
                 padding: "var(--s-2) var(--s-3)",
-                background: "var(--n900)",
-                color: "var(--n100)",
-                border: "var(--border-width) solid var(--n900)",
+                background: "var(--surface-sunken)",
+                color: "var(--text)",
+                border: "var(--border-width) solid var(--border-strong)",
                 fontSize: "var(--fs-label)",
                 cursor: "pointer",
               }}

@@ -137,6 +137,10 @@ textarea {
   border: var(--border-width-strong) dashed var(--border-strong);
 }
 
+/* The one sanctioned use of the raw ramp in a component: this stamp exists to
+   be impossible to overlook, so it takes the extreme of the ramp rather than a
+   surface token that sits close to the page. Everything else uses the semantic
+   layer. */
 .status-stamp {
   display: inline-flex;
   align-items: center;
@@ -146,6 +150,21 @@ textarea {
   color: var(--n100);
   border: var(--border-width) solid var(--n900);
   transform: rotate(-2deg);
+}
+
+/* Inverted for dark, in BOTH the ways a viewer can be in dark. The rule below
+   used to key only on the explicit attribute, which nothing ever set until the
+   theme toggle existed — so in the default "system" state, on a dark OS, the
+   stamp kept its light-theme treatment and sat near-black on a near-black
+   surface. That is the one component that must never blend in. */
+:root:not([data-theme='light']) {
+  @media (prefers-color-scheme: dark) {
+    .status-stamp {
+      background: var(--n100);
+      color: var(--n900);
+      border-color: var(--n100);
+    }
+  }
 }
 
 [data-theme='dark'] .status-stamp {
