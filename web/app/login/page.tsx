@@ -1,16 +1,23 @@
 import { signIn, auth } from "@/auth";
 import { redirect } from "next/navigation";
 import { Button } from "@/components/ui";
+import { safePath } from "@/lib/links";
 
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; next?: string }>;
 }) {
-  const session = await auth();
-  if (session?.accountId) redirect("/");
+  const { error, next } = await searchParams;
 
-  const { error } = await searchParams;
+  // Validated here as well as where it is set: `next` arrives in a URL anyone
+  // can edit, and an unchecked one is an open redirect on the one page whose
+  // whole job is to be trusted.
+  const target = safePath(next) ?? "/";
+
+  const session = await auth();
+  if (session?.accountId) redirect(target);
+
   const devLoginEnabled =
     process.env.NODE_ENV !== "production" && process.env.AUTH_DEV_LOGIN === "true";
 
@@ -83,7 +90,7 @@ export default async function LoginPage({
         <form
           action={async () => {
             "use server";
-            await signIn("google", { redirectTo: "/" });
+            await signIn("google", { redirectTo: target });
           }}
         >
           <Button variant="primary" style={{ width: "100%", padding: "var(--s-3)" }}>
@@ -96,7 +103,7 @@ export default async function LoginPage({
             action={async (formData: FormData) => {
               "use server";
               const email = String(formData.get("email") ?? "");
-              await signIn("dev", { email, redirectTo: "/" });
+              await signIn("dev", { email, redirectTo: target });
             }}
             style={{ marginTop: "var(--s-4)", display: "flex", gap: "var(--s-2)" }}
           >

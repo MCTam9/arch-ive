@@ -9,7 +9,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const LINKS = [
-  { href: "/", label: "Browse" },
+  { href: "/browse", label: "Browse" },
   { href: "/matrix", label: "Matrix" },
   { href: "/review", label: "Review" },
   { href: "/ingest", label: "Ingest" },
@@ -22,12 +22,15 @@ export function NavLinks() {
   return (
     <nav aria-label="Sections" style={{ display: "flex", gap: "var(--s-1)" }}>
       {LINKS.map((link) => {
-        // "/" would otherwise match every route. An item page counts as
-        // Browse, because that is the section it belongs to.
+        // An item page counts as Browse, because that is the section it
+        // belongs to. This used to also carry a special case for "/", which
+        // would otherwise prefix-match every route -- browse lived there, so
+        // the wordmark and this link pointed at the same place and neither
+        // could honestly be current. Browse has its own path now and the
+        // generic rule covers it.
         const active =
-          link.href === "/"
-            ? pathname === "/" || pathname.startsWith("/item/")
-            : pathname.startsWith(link.href);
+          pathname.startsWith(link.href) ||
+          (link.href === "/browse" && pathname.startsWith("/item/"));
         return (
           // The active treatment used to be this ternary, painted inline. That
           // is why the nav had no hover: an inline background beats any rule a

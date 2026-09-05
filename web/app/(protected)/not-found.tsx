@@ -1,4 +1,5 @@
 import { ButtonLink } from "@/components/ui";
+import { BROWSE_PATH } from "@/lib/links";
 
 // Lives inside (protected) so a bad id renders with the nav still attached.
 // Without this file, notFound() from /item/[id] fell through to Next's stock
@@ -19,7 +20,7 @@ export default function NotFound() {
       {/* Was the barest link in the app — no class, no state, the browser's
           default underline in body colour. The one way out of a dead end
           should look like a way out. */}
-      <ButtonLink href="/" variant="primary">
+      <ButtonLink href={BROWSE_PATH} variant="primary">
         Back to browse
       </ButtonLink>
     </div>

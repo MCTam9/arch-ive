@@ -1,299 +1,166 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { requireSession } from "@/lib/session";
-import {
-  getFacetOptions,
-  listKnowledgeItems,
-  BROWSE_PAGE_SIZE,
-  ITEM_TYPES,
-  type BrowseFilters,
-  type BrowseItem,
-  type FacetOptions,
-} from "@/lib/queries";
-import { href, browseParams } from "@/lib/links";
-import { Mono, CiteRef } from "@/components/mono";
-import { Button, DataLabel, EmptyState } from "@/components/ui";
-import { StatusFlag } from "@/components/draft-wrapper";
+import { getHomeSummary } from "@/lib/queries";
+import { BROWSE_PATH, browseHref, browseParams } from "@/lib/links";
+import { Mono } from "@/components/mono";
+import { EmptyState } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = {
-  document?: string;
-  item_type?: string;
-  topic?: string;
-  scale?: string;
-  level?: string;
-  q?: string;
-  offset?: string;
-};
+// The launcher. `/` used to be the results list itself, so arriving signed in
+// dropped you on page 1 of all 771 items in document order -- a view that
+// answers no question anyone had.
+//
+// It is shaped like a search home page, but deliberately not blank like one.
+// Google's home page is empty because its index is unknowable and there is
+// nothing honest to put there. This corpus is 771 items across 14 documents:
+// small enough to show. So the grid is not only navigation -- it is the size
+// and shape of what you are about to search, which is the thing a newcomer
+// most needs and the thing a blank box cannot give them.
 
-export default async function BrowsePage({
+export default async function HomePage({
   searchParams,
 }: {
-  searchParams: Promise<SearchParams>;
+  searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const session = await requireSession();
   const sp = await searchParams;
-  const offset = Math.max(Number(sp.offset ?? 0) || 0, 0);
 
-  const filters: BrowseFilters = {
-    documentSlug: sp.document || undefined,
-    itemType: sp.item_type || undefined,
-    topicId: sp.topic || undefined,
-    scaleId: sp.scale || undefined,
-    levelId: sp.level || undefined,
-    q: sp.q || undefined,
-  };
+  // Belt and braces. proxy.ts already turns `/?topic=…` into a real 307 to
+  // /browse before anything renders, which is what a shared link deserves.
+  // This is the same rule enforced where it cannot be bypassed: if the proxy
+  // is ever skipped, an old link still keeps its filters instead of silently
+  // arriving on a page that ignores them. A redirect thrown here is a 200 with
+  // a client-side hop, because the layout has already streamed -- correct, but
+  // second best, which is why it is second.
+  const inherited = browseParams(sp);
+  if (Object.keys(inherited).length > 0) redirect(browseHref(inherited));
 
-  const [facets, { items, total }] = await Promise.all([
-    getFacetOptions(session.accountId),
-    listKnowledgeItems(session.accountId, filters, { offset }),
-  ]);
+  const { topics, itemTypes, totals } = await getHomeSummary(session.accountId);
 
-  const current = browseParams(sp as Record<string, string | undefined>);
-  const ranked = Boolean(filters.q);
-
-  // Every generated link keeps the rest of the filters. Changing a facet
-  // returns to page 1; paging keeps everything and moves only the offset.
-  const withFilters = (over: Record<string, string | number | undefined>) =>
-    href("/", { ...current, ...over });
-
-  const docLabel = (slug: string) =>
-    facets.documents.find((d) => d.slug === slug)?.title ?? slug;
-  const termLabel = (id: string) =>
-    [...facets.topics, ...facets.scales, ...facets.levels].find((t) => t.id === id)?.label ?? id;
-
-  const chips: { key: keyof typeof current; label: string }[] = [];
-  if (current.document) chips.push({ key: "document", label: docLabel(current.document) });
-  if (current.item_type) chips.push({ key: "item_type", label: current.item_type.replace(/_/g, " ") });
-  for (const k of ["topic", "scale", "level"] as const) {
-    if (current[k]) chips.push({ key: k, label: termLabel(current[k]!) });
+  if (totals.items === 0) {
+    return (
+      <div style={{ maxWidth: "60ch", margin: "0 auto", padding: "var(--s-16) var(--s-6)" }}>
+        <EmptyState title="Nothing ingested yet" action={{ href: "/ingest", label: "Go to ingest" }}>
+          The corpus is empty, so there is nothing to search. Run a document
+          through the ingest pipeline and it will appear here.
+        </EmptyState>
+      </div>
+    );
   }
-  if (current.q) chips.push({ key: "q", label: `“${current.q}”` });
-
-  const from = total === 0 ? 0 : offset + 1;
-  const to = offset + items.length;
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 260px) 1fr" }}>
-      <aside
-        className="chrome"
+    <div style={{ maxWidth: 860, margin: "0 auto", padding: "var(--s-16) var(--s-6) var(--s-12)" }}>
+      <div style={{ textAlign: "center", marginBottom: "var(--s-8)" }}>
+        <h1 className="font-display" style={{ fontSize: "var(--fs-h1)", margin: "0 0 var(--s-2)" }}>
+          arch-ive
+        </h1>
+        <p className="font-body text-muted" style={{ margin: 0, fontSize: "var(--fs-sm)" }}>
+          Architecture knowledge base
+        </p>
+      </div>
+
+      {/* A plain GET form pointed at browse. No JS, no client component, no
+          redirect handler -- the browser turns this into /browse?q=… by
+          itself, which is exactly the behaviour wanted and none of the code.
+          Same pattern as the filter rail, which has always worked this way. */}
+      <form
+        method="GET"
+        action={BROWSE_PATH}
+        role="search"
+        style={{ display: "flex", gap: "var(--s-2)", marginBottom: "var(--s-4)" }}
+      >
+        <label htmlFor="home-q" className="sr-only">
+          Search the corpus
+        </label>
+        <input
+          id="home-q"
+          name="q"
+          type="search"
+          autoFocus
+          placeholder="e.g. embodied carbon 2030"
+          className="field font-body"
+          style={{ flex: 1, padding: "var(--s-3)", fontSize: "var(--fs-body)" }}
+        />
+        <button type="submit" className="btn btn-primary font-display" style={{ padding: "0 var(--s-5)" }}>
+          Search
+        </button>
+      </form>
+
+      {/* Counts, not adjectives. Figures are deliberately absent: 898 of them
+          carry a description, but search cannot reach any of it (queries.ts
+          inner-joins knowledge_item), and advertising them on the page whose
+          job is to launch a search would promise something it does not do. */}
+      <Mono
+        className="text-muted"
+        style={{ display: "block", textAlign: "center", fontSize: "var(--fs-sm)", marginBottom: "var(--s-10)" }}
+      >
+        {totals.items} items · {totals.documents} documents · {totals.pages} pages ·{" "}
+        {totals.chunks} chunks
+      </Mono>
+
+      <h2 className="font-display" style={{ fontSize: "var(--fs-label)", margin: "0 0 var(--s-3)" }}>
+        Topics
+      </h2>
+      <ul
         style={{
-          borderRight: "var(--border-width) solid var(--chrome-border)",
-          padding: "var(--s-4)",
+          listStyle: "none",
+          margin: "0 0 var(--s-8)",
+          padding: 0,
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+          gap: "var(--s-3)",
         }}
       >
-        <h2 className="font-display" style={{ fontSize: "var(--fs-label)", margin: "0 0 var(--s-4) 0" }}>
-          Filters
-        </h2>
-        <form method="GET" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
-          {/* Changing any filter starts again at page 1 — keeping the old
-              offset lands you on an empty page and looks like no results. */}
-          <input type="hidden" name="offset" value="0" />
-
-          <label style={{ display: "flex", flexDirection: "column", gap: "var(--s-1)" }}>
-            <span className="font-display" style={{ fontSize: "var(--fs-label)" }}>
-              Search text
-            </span>
-            <input
-              name="q"
-              defaultValue={sp.q}
-              placeholder="e.g. embodied carbon"
-              className="field font-body"
-            />
-          </label>
-
-          <FacetSelect
-            name="document"
-            label="Document"
-            value={sp.document}
-            options={facets.documents.map((d) => ({
-              value: d.slug,
-              label: d.title ?? d.slug,
-              n: d.n,
-            }))}
-          />
-          <FacetSelect
-            name="item_type"
-            label="Item type"
-            value={sp.item_type}
-            options={ITEM_TYPES.map((t) => ({ value: t, label: t.replace(/_/g, " ") }))}
-          />
-          <FacetSelect name="topic" label="Topic" value={sp.topic} options={toOptions(facets.topics)} />
-          <FacetSelect name="scale" label="Scale" value={sp.scale} options={toOptions(facets.scales)} />
-          <FacetSelect name="level" label="Level" value={sp.level} options={toOptions(facets.levels)} />
-
-          <Button variant="primary">Apply</Button>
-        </form>
-      </aside>
-
-      <section style={{ padding: "var(--s-4) var(--s-6)", minWidth: 0 }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "baseline",
-            gap: "var(--s-4)",
-            flexWrap: "wrap",
-            marginBottom: "var(--s-3)",
-          }}
-        >
-          <h1 className="font-display" style={{ fontSize: "var(--fs-h2)", margin: 0 }}>
-            Browse
-          </h1>
-          <Mono className="text-muted" style={{ fontSize: "var(--fs-sm)" }}>
-            {total === 0
-              ? "no results"
-              : `${from}–${to} of ${total} · ${ranked ? "by relevance" : "document order"}`}
-          </Mono>
-        </div>
-
-        {chips.length > 0 && (
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "var(--s-2)",
-              alignItems: "center",
-              marginBottom: "var(--s-4)",
-            }}
-          >
-            {chips.map((chip) => (
-              <Link
-                key={chip.key}
-                href={withFilters({ [chip.key]: undefined, offset: undefined })}
-                className="chip chip-filled font-mono"
-                title={`Remove ${chip.key.replace(/_/g, " ")} filter`}
-              >
-                {/* .chip-x holds the × back until the chip is hovered, so the
-                    remove affordance appears at the moment it becomes true.
-                    Before, the × was permanently at full strength on something
-                    that gave no other sign of being clickable. */}
-                {chip.label} <span className="chip-x" aria-hidden="true">×</span>
-              </Link>
-            ))}
-            <Link href="/" className="font-mono link" style={{ fontSize: "var(--fs-sm)" }}>
-              Clear all
+        {topics.map((t) => (
+          <li key={t.id} style={{ display: "flex" }}>
+            <Link
+              href={browseHref({ topic: t.id })}
+              className="card card-link"
+              style={{
+                flex: 1,
+                padding: "var(--s-3)",
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "space-between",
+                gap: "var(--s-4)",
+                minHeight: "5.5rem",
+              }}
+            >
+              <span className="font-display" style={{ fontSize: "var(--fs-label)" }}>
+                {t.label}
+              </span>
+              {/* The count is data, so it is mono -- and it is the reason the
+                  tile exists rather than a decoration on it. */}
+              <Mono className="text-muted" style={{ fontSize: "var(--fs-sm)", textAlign: "right" }}>
+                {t.n}
+              </Mono>
             </Link>
-          </div>
-        )}
-
-        {items.length === 0 ? (
-          <EmptyState
-            title="No matching records"
-            action={chips.length > 0 ? { href: "/", label: "Clear all filters" } : undefined}
-          >
-            {chips.length > 0
-              ? "Filters combine with AND, so a narrow topic and a specific document together can easily match nothing. Remove one and try again."
-              : "Nothing in the corpus matches. If this is unexpected, the enrichment stage that tags items with topic, scale and level may not have run for the newest documents."}
-          </EmptyState>
-        ) : (
-          <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "var(--s-3)" }}>
-            {items.map((item) => (
-              <li key={item.id}>
-                <Link href={`/item/${item.id}?from=browse&ret=${encodeURIComponent(withFilters({}))}`} className="card card-link" style={{ padding: "var(--s-4)" }}>
-                  <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "center", marginBottom: "var(--s-2)" }}>
-                    <DataLabel>{item.item_type.replace(/_/g, " ")}</DataLabel>
-                    <StatusFlag status={item.content_status} />
-                  </div>
-                  <p className="font-body" style={{ margin: 0, fontWeight: 600 }}>
-                    {item.title || item.statement?.slice(0, 120) || "(untitled)"}
-                  </p>
-                  {item.snippet ? (
-                    <p className="font-body text-muted" style={{ margin: "var(--s-2) 0 0", fontSize: "var(--fs-sm)" }}>
-                      <Highlighted text={item.snippet} />
-                    </p>
-                  ) : (
-                    item.title &&
-                    item.statement && (
-                      <p className="font-body text-muted" style={{ margin: "var(--s-2) 0 0", fontSize: "var(--fs-sm)" }}>
-                        {item.statement.slice(0, 160)}
-                        {item.statement.length > 160 ? "…" : ""}
-                      </p>
-                    )
-                  )}
-                  <div style={{ marginTop: "var(--s-3)" }}>
-                    <CiteRef
-                      documentSlug={item.document_title ?? item.document_slug}
-                      pageIndex={item.page_index}
-                      printedPageLabel={item.printed_page_label}
-                    />
-                  </div>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {total > items.length && (
-          <nav aria-label="Pages" style={{ display: "flex", gap: "var(--s-4)", marginTop: "var(--s-6)", alignItems: "baseline" }}>
-            {offset > 0 && (
-              <Link className="font-mono link" href={withFilters({ offset: Math.max(0, offset - BROWSE_PAGE_SIZE) })}>
-                &larr; previous
-              </Link>
-            )}
-            {to < total && (
-              <Link className="font-mono link" href={withFilters({ offset: offset + BROWSE_PAGE_SIZE })}>
-                next &rarr;
-              </Link>
-            )}
-          </nav>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function toOptions(terms: FacetOptions["topics"]) {
-  // An option that can only ever return nothing is worse than no option: the
-  // taxonomy defines 27 topics and 26 are used, but stage and project_type are
-  // barely tagged at all, so a term with no items is dropped rather than shown
-  // as a filter that silently empties the page.
-  return terms.filter((t) => t.n > 0).map((t) => ({ value: t.id, label: t.label, n: t.n }));
-}
-
-/** ts_headline marks matches with [[…]]; render them as <mark> without ever
- *  putting corpus text through dangerouslySetInnerHTML. */
-function Highlighted({ text }: { text: string }) {
-  return (
-    <>
-      {text.split(/\[\[|\]\]/).map((part, i) =>
-        i % 2 === 1 ? (
-          <mark key={i} style={{ background: "var(--accent-surface)", color: "var(--text)" }}>
-            {part}
-          </mark>
-        ) : (
-          <span key={i}>{part}</span>
-        ),
-      )}
-    </>
-  );
-}
-
-function FacetSelect({
-  name,
-  label,
-  value,
-  options,
-}: {
-  name: string;
-  label: string;
-  value?: string;
-  options: { value: string; label: string; n?: number }[];
-}) {
-  return (
-    <label style={{ display: "flex", flexDirection: "column", gap: "var(--s-1)" }}>
-      <span className="font-display" style={{ fontSize: "var(--fs-label)" }}>
-        {label}
-      </span>
-      <select name={name} defaultValue={value ?? ""} className="field font-mono">
-        <option value="">all</option>
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-            {o.n !== undefined ? ` (${o.n})` : ""}
-          </option>
+          </li>
         ))}
-      </select>
-    </label>
+      </ul>
+
+      {/* Topic covers 487 of 771 items -- the largest document carries scale
+          and building-use tags but no topic at all, so a topic grid on its own
+          quietly hides a third of the corpus. Every item has exactly one
+          item_type, so this row is the half that closes the gap. */}
+      <h2 className="font-display" style={{ fontSize: "var(--fs-label)", margin: "0 0 var(--s-3)" }}>
+        Item type
+      </h2>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginBottom: "var(--s-8)" }}>
+        {itemTypes.map((t) => (
+          <Link key={t.id} href={browseHref({ item_type: t.id })} className="chip font-mono">
+            {t.id.replace(/_/g, " ")} <span className="text-muted">{t.n}</span>
+          </Link>
+        ))}
+      </div>
+
+      <p style={{ textAlign: "center", margin: 0 }}>
+        <Link href={BROWSE_PATH} className="link font-mono">
+          Browse all {totals.items} items &rarr;
+        </Link>
+      </p>
+    </div>
   );
 }

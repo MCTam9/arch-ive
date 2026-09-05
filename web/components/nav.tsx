@@ -27,9 +27,10 @@ export function Nav({ email }: { email?: string | null }) {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-6)" }}>
-          {/* The wordmark is a link to the same place as Browse, so it takes
-              the tab treatment but never aria-current — two current markers in
-              one rail is worse than none. */}
+          {/* The wordmark goes home, which is no longer the same place as
+              Browse. It still never takes aria-current: home is where the
+              wordmark always goes, so marking it adds nothing, and two current
+              markers in one rail is worse than none. */}
           <Link href="/" className="tab font-display" style={{ fontSize: "var(--fs-h3)" }}>
             arch-ive
           </Link>

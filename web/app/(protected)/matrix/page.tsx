@@ -1,6 +1,6 @@
 import { requireSession } from "@/lib/session";
 import { listFrameworks, getMatrixDocuments, getMatrix } from "@/lib/queries";
-import { href } from "@/lib/links";
+import { href, BROWSE_PATH } from "@/lib/links";
 import Link from "next/link";
 import { Mono } from "@/components/mono";
 import { Button, PageHeader, EmptyState } from "@/components/ui";
@@ -23,7 +23,7 @@ export default async function MatrixPage({
   if (!frameworkSlug) {
     return (
       <div style={{ padding: "var(--s-6)" }}>
-        <EmptyState title="No frameworks" action={{ href: "/", label: "Go to browse" }}>
+        <EmptyState title="No frameworks" action={{ href: BROWSE_PATH, label: "Go to browse" }}>
           The matrix reads from the framework tables, which the compliance and crib-sheet
           extractors populate. Nothing has been loaded into them yet.
         </EmptyState>

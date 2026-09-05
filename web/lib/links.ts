@@ -23,6 +23,15 @@ export function href(path: string, params: Record<string, QueryValue> = {}): str
   return qs ? `${path}?${qs}` : path;
 }
 
+/** Where the results list lives.
+ *
+ *  It used to be `/`, which meant the wordmark and the Browse nav link pointed
+ *  at the same place and neither could honestly claim to be current. `/` is
+ *  the home page now. Every browse link goes through `browseHref` so the next
+ *  move costs one line rather than fourteen.
+ */
+export const BROWSE_PATH = "/browse";
+
 /** The filters the browse page understands, in the order they appear in the UI. */
 export const BROWSE_PARAMS = [
   "document",
@@ -45,6 +54,22 @@ export function browseParams(sp: Record<string, string | undefined>): BrowsePara
   return out;
 }
 
+/** A browse URL with these filters. */
+export function browseHref(params: Record<string, QueryValue> = {}): string {
+  return href(BROWSE_PATH, params);
+}
+
+/** A path we are willing to redirect to, or null.
+ *
+ *  Same rule the `ret` parameter has always used: it must be a path on this
+ *  site. `//evil.example` is a protocol-relative URL that browsers treat as
+ *  absolute, so "starts with /" alone is not enough.
+ */
+export function safePath(candidate: string | undefined | null): string | null {
+  if (!candidate) return null;
+  return candidate.startsWith("/") && !candidate.startsWith("//") ? candidate : null;
+}
+
 /** Where "back" goes from an item, and what to call it.
  *
  *  An item is reachable from browse, the matrix and the review queue, and the
@@ -54,13 +79,13 @@ export function browseParams(sp: Record<string, string | undefined>): BrowsePara
  *  where it started.
  */
 export function backLink(from: string | undefined, ret: string | undefined) {
-  const target = ret && ret.startsWith("/") && !ret.startsWith("//") ? ret : null;
+  const target = safePath(ret);
   switch (from) {
     case "matrix":
       return { label: "matrix", href: target ?? "/matrix" };
     case "review":
       return { label: "review queue", href: target ?? "/review" };
     default:
-      return { label: "browse", href: target ?? "/" };
+      return { label: "browse", href: target ?? BROWSE_PATH };
   }
 }

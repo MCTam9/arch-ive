@@ -1,8 +1,8 @@
 # Workflow: deploy the web app
 
-**Objective.** Put the browse, matrix and review views in front of approved
-accounts only, on Vercel's free tier, without any corpus material becoming
-publicly fetchable.
+**Objective.** Put the home, browse, matrix and review views in front of
+approved accounts only, on Vercel's free tier, without any corpus material
+becoming publicly fetchable.
 
 ## Tools
 
@@ -149,7 +149,38 @@ also about a third of the bytes.
 Both formats stay gitignored. A clone without them falls through to Jacquard 12
 from Google Fonts, so the page still renders.
 
+## Routes
+
+| path | what it is |
+|---|---|
+| `/` | home — search box, topic grid, item-type row |
+| `/browse` | the results list and its filter rail |
+| `/item/[id]` · `/matrix` · `/review` · `/ingest` · `/styleguide` | as named |
+| `/login` · `/api/auth/*` | the only routes outside `(protected)` |
+
+Browse lived at `/` until the home page existed. Two consequences worth
+keeping in mind, both handled in `web/proxy.ts`:
+
+- **Old links still work.** `/?topic=…&q=…` 307s to `/browse` carrying its
+  query. Done in the proxy rather than the page because a `redirect()` thrown
+  during rendering arrives after the layout has streamed, which makes it a 200
+  with a client-side hop instead of a real redirect.
+- **A signed-out visitor keeps their destination.** The proxy puts the request
+  path in `x-pathname`; `requireSession()` turns it into `/login?next=…` and
+  the login page validates it with `safePath` before using it. Without this a
+  shared `/browse?topic=…` link handed to someone signed out comes back as the
+  home page with the filters gone.
+
+The proxy does **no** authorization — that stays in
+`app/(protected)/layout.tsx`, for the reason recorded at the top of
+`web/lib/session.ts`.
+
 ## Deploy
+
+The GitHub repo is connected to the Vercel project (production branch `main`,
+**Root Directory `web`** — the repo root has no `package.json`, so a
+git-triggered build fails without it). **A push to `main` deploys.** The CLI
+below is the fallback:
 
 ```sh
 cd web && npx vercel --prod --yes --scope <team>

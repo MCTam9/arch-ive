@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/session";
 import { getKnowledgeItem } from "@/lib/queries";
-import { backLink } from "@/lib/links";
+import { backLink, browseHref } from "@/lib/links";
 import { Mono, CiteRef } from "@/components/mono";
 import { DraftWrapper } from "@/components/draft-wrapper";
 import { LevelBadge } from "@/components/level-badge";
@@ -38,7 +38,7 @@ export default async function ItemPage({
 
       <div style={{ display: "flex", alignItems: "center", gap: "var(--s-3)", margin: "var(--s-3) 0 var(--s-1) 0", flexWrap: "wrap" }}>
         <DataLabel>{item.item_type.replace(/_/g, " ")}</DataLabel>
-        <Link href={`/?document=${encodeURIComponent(item.document_slug)}`} className="font-mono link" style={{ fontSize: "var(--fs-sm)" }}>
+        <Link href={browseHref({ document: item.document_slug })} className="font-mono link" style={{ fontSize: "var(--fs-sm)" }}>
           {item.document_title ?? item.document_slug}
         </Link>
       </div>
@@ -107,7 +107,7 @@ export default async function ItemPage({
               return filterable ? (
                 <Link
                   key={i}
-                  href={`/?${t.taxonomy_id}=${encodeURIComponent(t.id)}`}
+                  href={browseHref({ [t.taxonomy_id]: t.id })}
                   className="chip chip-filled font-body"
                 >
                   {label}

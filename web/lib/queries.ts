@@ -48,12 +48,18 @@ export async function getFacetOptions(accountId: string): Promise<FacetOptions> 
   return withAccount(accountId, async (client) => {
     const { rows } = await client.query<{ facets: FacetOptions }>(`
       WITH terms AS (
+        -- Subtree counts, not direct ones. Topic is an ltree hierarchy, and
+        -- selecting a parent filters by the whole subtree (see the topic
+        -- clause in listKnowledgeItems), so a direct count on a parent
+        -- promises 17 and delivers 53. Scale and level are flat, where a
+        -- subtree is just the term itself, so one expression serves all three.
         SELECT tt.taxonomy_id, tt.id, tt.label, tt.path, tt.ordinal,
-               count(it.knowledge_item_id)::int AS n
+               (SELECT count(DISTINCT it.knowledge_item_id)::int
+                  FROM item_term it
+                  JOIN taxonomy_term d ON d.id = it.term_id
+                 WHERE d.path <@ tt.path) AS n
           FROM taxonomy_term tt
-          LEFT JOIN item_term it ON it.term_id = tt.id
          WHERE tt.taxonomy_id IN ('topic', 'scale', 'level')
-         GROUP BY tt.id, tt.taxonomy_id, tt.label, tt.path, tt.ordinal
       ), docs AS (
         SELECT sd.slug, sd.title, sd.doc_kind::text AS doc_kind,
                count(ki.id)::int AS n
@@ -82,6 +88,57 @@ export async function getFacetOptions(accountId: string): Promise<FacetOptions> 
       ) AS facets
     `);
     return rows[0].facets;
+  });
+}
+
+export type HomeSummary = {
+  topics: TaxonomyTerm[];
+  itemTypes: { id: string; n: number }[];
+  totals: { items: number; documents: number; pages: number; chunks: number };
+};
+
+// The home page in one round-trip, for the same reason getFacetOptions is one
+// statement -- and more so: this is the page that wakes the database from idle
+// on the free tier, so it is the one whose latency a visitor actually feels.
+//
+// Two dimensions, deliberately. Topic has the breadth (11 top-level terms) but
+// covers only 487 of 771 items, so a topic grid on its own silently hides the
+// rest -- most of one large document, which carries scale and building-use
+// tags but no topic. item_type is on the row itself, so every item has exactly
+// one and the second row closes the gap. Both map 1:1 onto filters that
+// already exist, so a tile is just a browse URL.
+export async function getHomeSummary(accountId: string): Promise<HomeSummary> {
+  return withAccount(accountId, async (client) => {
+    const { rows } = await client.query<{ summary: HomeSummary }>(`
+      WITH tops AS (
+        SELECT tt.id, tt.label, tt.ordinal, tt.path,
+               (SELECT count(DISTINCT it.knowledge_item_id)::int
+                  FROM item_term it
+                  JOIN taxonomy_term d ON d.id = it.term_id
+                 WHERE d.path <@ tt.path) AS n
+          FROM taxonomy_term tt
+         WHERE tt.taxonomy_id = 'topic' AND tt.parent_id IS NULL
+      )
+      SELECT json_build_object(
+        'topics', coalesce((
+          SELECT json_agg(json_build_object('id', id, 'label', label, 'n', n)
+                 ORDER BY n DESC, ordinal)
+            FROM tops WHERE n > 0), '[]'::json),
+        'itemTypes', coalesce((
+          SELECT json_agg(t ORDER BY (t->>'n')::int DESC)
+            FROM (
+              SELECT json_build_object('id', item_type::text, 'n', count(*)::int) AS t
+                FROM knowledge_item GROUP BY item_type
+            ) s), '[]'::json),
+        'totals', json_build_object(
+          'items',     (SELECT count(*)::int FROM knowledge_item),
+          'documents', (SELECT count(*)::int FROM source_document WHERE is_current),
+          'pages',     (SELECT count(*)::int FROM source_page),
+          'chunks',    (SELECT count(*)::int FROM chunk)
+        )
+      ) AS summary
+    `);
+    return rows[0].summary;
   });
 }
 
@@ -157,23 +214,23 @@ export async function listKnowledgeItems(
       conditions.push(sql.replace("?", `$${params.length}`));
     };
 
+    // A term matches its whole subtree. `term_id = ?` was exact, so choosing
+    // a top-level topic returned only the items tagged on the parent itself --
+    // "Health & Wellbeing" gave 17 of its 53. The taxonomy is an ltree with a
+    // GiST index on `path` (db/schema.sql), so `<@` is both correct and cheap.
+    // Scale and level are flat: their subtree is the term, and the clause is
+    // identical, which is why there is one of it.
+    const TERM_SUBTREE = `EXISTS (
+      SELECT 1 FROM item_term it
+        JOIN taxonomy_term tt ON tt.id = it.term_id
+       WHERE it.knowledge_item_id = ki.id
+         AND tt.path <@ (SELECT path FROM taxonomy_term WHERE id = ?))`;
+
     if (filters.documentSlug) push("d.slug = ?", filters.documentSlug);
     if (filters.itemType) push("ki.item_type = ?::item_type", filters.itemType);
-    if (filters.topicId)
-      push(
-        "EXISTS (SELECT 1 FROM item_term it WHERE it.knowledge_item_id = ki.id AND it.term_id = ?)",
-        filters.topicId,
-      );
-    if (filters.scaleId)
-      push(
-        "EXISTS (SELECT 1 FROM item_term it WHERE it.knowledge_item_id = ki.id AND it.term_id = ?)",
-        filters.scaleId,
-      );
-    if (filters.levelId)
-      push(
-        "EXISTS (SELECT 1 FROM item_term it WHERE it.knowledge_item_id = ki.id AND it.term_id = ?)",
-        filters.levelId,
-      );
+    if (filters.topicId) push(TERM_SUBTREE, filters.topicId);
+    if (filters.scaleId) push(TERM_SUBTREE, filters.scaleId);
+    if (filters.levelId) push(TERM_SUBTREE, filters.levelId);
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
     // Shared tail: the columns every row needs, plus the pre-LIMIT total, so
