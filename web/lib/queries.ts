@@ -224,6 +224,7 @@ export type ItemDetail = {
     page_index: number | null;
     printed_page_label: string | null;
     document_slug: string;
+    page_image_key: string | null;
   }[];
   terms: { taxonomy_id: string; label: string }[];
   // per-scope applicability (e.g. "Design-Build Contractor", "Main
@@ -310,8 +311,15 @@ export async function getKnowledgeItem(
     }
 
     const citations = await client.query(
-      `SELECT c.page_index, c.printed_page_label, d.slug AS document_slug
-       FROM citation c JOIN source_document d ON d.id = c.document_id
+      // The scan comes along with the citation: this used to render only in
+      // the review queue, so deciding an item was also the act of hiding the
+      // page it was extracted from.
+      `SELECT c.page_index, c.printed_page_label, d.slug AS document_slug,
+              p.page_image_key
+       FROM citation c
+       JOIN source_document d ON d.id = c.document_id
+       LEFT JOIN source_page p
+              ON p.document_id = c.document_id AND p.page_index = c.page_index
        WHERE c.knowledge_item_id = $1
        ORDER BY c.page_index NULLS LAST`,
       [id],
@@ -622,13 +630,18 @@ export async function recordReview(
 ): Promise<void> {
   await withAccount(accountId, async (client) => {
     await client.query(
+      // $1 is the enum and $2 is the reset flag, deliberately not the same
+      // placeholder twice: `SET review_status = $1 ... CASE WHEN $1 = 'pending'`
+      // made Postgres deduce $1 as both review_status and text and fail the
+      // statement with 42P08 "inconsistent types deduced for parameter $1".
+      //
       // reviewed_at goes back to NULL on reopen: a reopened item has not been
       // decided, and leaving a timestamp there says it has.
       `UPDATE knowledge_item
           SET review_status = $1,
-              reviewed_at = CASE WHEN $1 = 'pending' THEN NULL ELSE now() END
-        WHERE id = $2`,
-      [decision, itemId],
+              reviewed_at = CASE WHEN $2 THEN NULL ELSE now() END
+        WHERE id = $3`,
+      [decision, decision === "pending", itemId],
     );
     await client.query(
       `INSERT INTO audit_log (account_id, action, knowledge_item_id)

@@ -76,12 +76,58 @@ def render(jobs: list[dict], stages: dict[str, list[dict]]) -> str:
     return "\n".join(lines)
 
 
+def prune(conn, apply: bool) -> int:
+    """Remove jobs that never produced a document.
+
+    The rule is deliberately narrow: `document_id IS NULL`. A job that
+    registered a document is that document's provenance -- when it was picked
+    up, what the classifier thought it was, which stages ran -- and deleting it
+    would throw away the only record of how the corpus got here. A job with no
+    document produced nothing, so there is nothing to lose.
+
+    This exists because four smoke-test files (42-1231 bytes, all synthetic)
+    sat in the ingest view as the only rows it had, while all 14 real documents
+    were loaded through the tools directly and have no job at all.
+    """
+    doomed = db.all_rows(
+        conn,
+        """
+        SELECT j.id, j.state::text AS state, j.sha256, j.size_bytes, j.discovered_at
+          FROM ingest_job j
+         WHERE j.document_id IS NULL
+         ORDER BY j.discovered_at
+        """,
+    )
+    if not doomed:
+        print("no jobs without a document -- nothing to prune")
+        return 0
+
+    for j in doomed:
+        print(f"  {j['state']:<13} {j['sha256'][:12]}  {j['size_bytes']:>10} bytes  {_fmt_ts(j['discovered_at'])}")
+    if not apply:
+        print(f"{len(doomed)} job(s) would be removed. Re-run with --yes to apply.")
+        return 0
+
+    ids = [j["id"] for j in doomed]
+    with conn.transaction():
+        # ingest_stage_run cascades on job_id (db/schema.sql), so the stage
+        # history goes with it rather than being orphaned.
+        db._exec(conn, "DELETE FROM ingest_job WHERE id = ANY(%s)", (ids,))
+    print(f"pruned {len(ids)} job(s) and their stage runs")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m tools.ingest_status")
     ap.add_argument("--limit", type=int, default=25, help="number of jobs to show (default 25)")
+    ap.add_argument("--prune", action="store_true",
+                    help="list jobs that never produced a document; add --yes to delete them")
+    ap.add_argument("--yes", action="store_true", help="required for --prune to write")
     args = ap.parse_args(argv)
 
     with db.connect() as conn:
+        if args.prune:
+            return prune(conn, args.yes)
         jobs = fetch_jobs(conn, args.limit)
         stages = fetch_stage_runs(conn, [str(j["id"]) for j in jobs])
 

@@ -85,3 +85,21 @@ extraction failure can never lose the file.
 - RLS is FORCED. A `psql` session without `set app.account_id` sees zero rows
   and looks like an empty database. Always go through `tools/db.py`.
 - Never print a real filename into a log line that could reach the repo.
+
+## Pruning the job table
+
+```sh
+python -m tools.ingest_status --prune          # list what would go
+python -m tools.ingest_status --prune --yes    # delete it
+```
+
+Only jobs with `document_id IS NULL` are eligible. A job that registered a
+document *is* that document's provenance — when it was picked up, what the
+classifier thought it was, which stages ran — so deleting it would throw away
+the only record of how the corpus got here. A job that produced nothing has
+nothing to lose.
+
+Worth knowing when reading the Ingest view: the original 14 documents were
+loaded through the tools directly rather than dropped into `inbox/`, so they
+have no `ingest_job` row and never appear there. The view describes what came
+through the folder, not what is in the corpus.

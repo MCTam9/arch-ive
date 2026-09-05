@@ -102,10 +102,30 @@ export default async function ItemPage({
         ) : (
           <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
             {item.citations.map((c, i) => (
-              <li key={i} className="font-mono" style={{ fontSize: "var(--fs-sm)" }}>
-                {c.document_slug}
-                {c.page_index != null && ` · pdf p${c.page_index}`}
-                {c.printed_page_label && ` · printed p${c.printed_page_label}`}
+              <li key={i} style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
+                <span className="font-mono" style={{ fontSize: "var(--fs-sm)" }}>
+                  {c.document_slug}
+                  {c.page_index != null && ` · pdf p${c.page_index}`}
+                  {c.printed_page_label && ` · printed p${c.printed_page_label}`}
+                </span>
+                {/* The page this record came from. No grain over it -- this is
+                    where a reader checks the extraction against the original,
+                    and texture there is noise in the literal sense. */}
+                {c.page_image_key && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={`/api/page-image/${c.page_image_key.replace(/^pages\//, "")}`}
+                    alt={`${c.document_slug} page ${c.page_index}`}
+                    loading="lazy"
+                    style={{
+                      width: "100%",
+                      height: "auto",
+                      display: "block",
+                      border: "var(--border-width) solid var(--border)",
+                      background: "var(--surface-sunken)",
+                    }}
+                  />
+                )}
               </li>
             ))}
           </ul>

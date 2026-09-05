@@ -117,22 +117,29 @@ export default async function ReviewPage({
                   {it.printed_page_label && ` · printed ${it.printed_page_label}`}
                 </p>
                 <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)" }}>
-                  <form action={decide}>
-                    <input type="hidden" name="id" value={it.id} />
-                    <input type="hidden" name="decision" value="approved" />
-                    <button type="submit" className="font-display transition-fast" disabled={!canReview}
-                      style={{ padding: "var(--s-2) var(--s-4)", background: "var(--accent)", color: "var(--accent-text)", border: "var(--border-width) solid var(--border-strong)" }}>
-                      Approve
-                    </button>
-                  </form>
-                  <form action={decide}>
-                    <input type="hidden" name="id" value={it.id} />
-                    <input type="hidden" name="decision" value="rejected" />
-                    <button type="submit" className="font-display transition-fast" disabled={!canReview}
-                      style={{ padding: "var(--s-2) var(--s-4)", background: "transparent", color: "var(--text)", border: "var(--border-width) solid var(--border-strong)" }}>
-                      Reject
-                    </button>
-                  </form>
+                  {/* Only offer the decisions that would change something.
+                      An Approve button on an already-approved record invites a
+                      click that does nothing. */}
+                  {it.review_status !== "approved" && (
+                    <form action={decide}>
+                      <input type="hidden" name="id" value={it.id} />
+                      <input type="hidden" name="decision" value="approved" />
+                      <button type="submit" className="font-display transition-fast" disabled={!canReview}
+                        style={{ padding: "var(--s-2) var(--s-4)", background: "var(--accent)", color: "var(--accent-text)", border: "var(--border-width) solid var(--border-strong)" }}>
+                        Approve
+                      </button>
+                    </form>
+                  )}
+                  {it.review_status !== "rejected" && (
+                    <form action={decide}>
+                      <input type="hidden" name="id" value={it.id} />
+                      <input type="hidden" name="decision" value="rejected" />
+                      <button type="submit" className="font-display transition-fast" disabled={!canReview}
+                        style={{ padding: "var(--s-2) var(--s-4)", background: "transparent", color: "var(--text)", border: "var(--border-width) solid var(--border-strong)" }}>
+                        Reject
+                      </button>
+                    </form>
+                  )}
                   {it.review_status !== "pending" && (
                     <form action={decide}>
                       <input type="hidden" name="id" value={it.id} />
