@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/session";
 import { getKnowledgeItem } from "@/lib/queries";
+import { backLink } from "@/lib/links";
 import { Mono } from "@/components/mono";
 import { DraftWrapper } from "@/components/draft-wrapper";
 import { LevelBadge } from "@/components/level-badge";
@@ -13,27 +14,34 @@ export const dynamic = "force-dynamic";
 
 export default async function ItemPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ from?: string; ret?: string }>;
 }) {
   const session = await requireSession();
   const { id } = await params;
+  const sp = await searchParams;
   const item = await getKnowledgeItem(session.accountId, id);
   if (!item) notFound();
 
+  // An item is reachable from browse, the matrix and the review queue. The
+  // back link used to say "browse" and go to unfiltered browse from all three.
+  const back = backLink(sp.from, sp.ret);
+
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto", padding: "var(--s-6)" }}>
-      <Link href="/" className="font-mono text-muted" style={{ fontSize: "var(--fs-sm)" }}>
-        &larr; browse
+    <div style={{ maxWidth: "80ch", margin: "0 auto", padding: "var(--s-6)" }}>
+      <Link href={back.href} className="font-mono link" style={{ fontSize: "var(--fs-sm)" }}>
+        &larr; back to {back.label}
       </Link>
 
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-3)", margin: "var(--s-3) 0 var(--s-1) 0" }}>
-        <span className="font-display" style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)" }}>
-          {item.item_type}
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-3)", margin: "var(--s-3) 0 var(--s-1) 0", flexWrap: "wrap" }}>
+        <span className="font-mono text-muted" style={{ fontSize: "var(--fs-micro)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          {item.item_type.replace(/_/g, " ")}
         </span>
-        <Mono className="text-muted" style={{ fontSize: "var(--fs-sm)" }}>
-          {item.document_slug}
-        </Mono>
+        <Link href={`/?document=${encodeURIComponent(item.document_slug)}`} className="font-mono link" style={{ fontSize: "var(--fs-sm)" }}>
+          {item.document_title ?? item.document_slug}
+        </Link>
       </div>
 
       <h1 className="font-display" style={{ fontSize: "var(--fs-h1)", margin: "0 0 var(--s-4) 0" }}>
@@ -80,19 +88,41 @@ export default async function ItemPage({
       {item.terms.length > 0 && (
         <Section title="Facets">
           <div style={{ display: "flex", gap: "var(--s-2)", flexWrap: "wrap" }}>
-            {item.terms.map((t, i) => (
-              <span
-                key={i}
-                className="font-mono"
-                style={{
-                  padding: "var(--s-1) var(--s-2)",
-                  border: "var(--border-width) solid var(--border-strong)",
-                  fontSize: "var(--fs-sm)",
-                }}
-              >
-                {t.taxonomy_id}: {t.label}
-              </span>
-            ))}
+            {/* These are links now. They looked exactly like the filter chips
+                on browse and did nothing, which made every record a dead end
+                rather than a route back into the corpus. Only the three
+                taxonomies browse can filter on become links; the rest stay
+                labels, because a link that filters nothing is worse than
+                plain text. */}
+            {item.terms.map((t, i) => {
+              const filterable = t.taxonomy_id === "topic" || t.taxonomy_id === "scale" || t.taxonomy_id === "level";
+              const chipStyle = {
+                padding: "var(--s-1) var(--s-2)",
+                border: "var(--border-width) solid var(--border-strong)",
+                fontSize: "var(--fs-sm)",
+                textDecoration: "none" as const,
+                display: "inline-block",
+              };
+              const label = (
+                <>
+                  <span className="text-muted">{t.taxonomy_id}</span> {t.label}
+                </>
+              );
+              return filterable ? (
+                <Link
+                  key={i}
+                  href={`/?${t.taxonomy_id}=${encodeURIComponent(t.id)}`}
+                  className="font-body transition-fast"
+                  style={{ ...chipStyle, background: "var(--accent-surface)", color: "var(--text)" }}
+                >
+                  {label}
+                </Link>
+              ) : (
+                <span key={i} className="font-body" style={chipStyle}>
+                  {label}
+                </span>
+              );
+            })}
           </div>
         </Section>
       )}

@@ -11,6 +11,7 @@ publicly fetchable.
 | `tools/upload_page_images.py` | page renders → the private R2 bucket (`--verify` checks the database's keys against it) |
 | `web/scripts/build_fonts.py` | display face OTF → WOFF2 for the deployment |
 | `web/.vercelignore` | what must never reach a public URL |
+| `tools/set_document_titles.py` | human labels for the 14 documents |
 | `tools/manage_allowlist.py` | who may sign in (see `workflows/provision_database.md`) |
 
 ## The rule that shapes all of it
@@ -61,6 +62,33 @@ account-scoped R2 token. Mint one in the Cloudflare dashboard scoped to
 *Object Read only* on `arch-ive-pages` and swap it in — the web app never
 writes to this bucket, and it has no business being able to reach the
 originals bucket at all, even as ciphertext.
+
+## Document titles
+
+```sh
+python -m tools.set_document_titles            # dry run
+python -m tools.set_document_titles --apply    # on every database
+```
+
+`source_document.title` was NULL for all 14 documents, so the whole interface
+labelled them `crib-water` and `framework-vol-e1`. Slugs remain the only
+identifier permitted in code, commits and issues (CONTRACT.md) — this is a
+display label only, and it lives in `private/documents.yaml` so the public repo
+never carries it. A slug with no entry falls back to one derived from the slug,
+so a fresh clone still reads sensibly.
+
+**These strings render in the UI.** No client, consultant or project name goes
+in them. `scripts/scan_forbidden.py` scans the repo, not the database, so this
+one is not enforced by a gate.
+
+## Region
+
+`web/vercel.json` pins functions to `lhr1`, beside Neon in `eu-west-2`. They
+ran in the default `iad1` (Washington DC), so every database round trip crossed
+the Atlantic — TTFB roughly halved on the routes that make no queries at all,
+and the query-heavy pages gain far more. Hobby allows a single region; check it
+took effect by reading the **second** field of `x-vercel-id` (`lhr1::lhr1::…`
+is right, `lhr1::iad1::…` means the edge is London and the function is not).
 
 ## Fonts
 

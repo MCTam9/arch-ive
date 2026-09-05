@@ -151,7 +151,14 @@ export default async function ReviewPage({
                       </button>
                     </form>
                   )}
-                  <Link href={`/item/${it.id}`} className="font-mono text-muted" style={{ alignSelf: "center", fontSize: "var(--fs-sm)" }}>
+                  {/* Carries where it came from, so "back" returns to this
+                      status tab at this offset rather than to page 1 of
+                      pending. */}
+                  <Link
+                    href={`/item/${it.id}?from=review&ret=${encodeURIComponent(href({ offset: offset || undefined }))}`}
+                    className="font-mono link"
+                    style={{ alignSelf: "center", fontSize: "var(--fs-sm)" }}
+                  >
                     open
                   </Link>
                 </div>

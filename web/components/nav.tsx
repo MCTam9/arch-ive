@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { signOut } from "@/auth";
+import { NavLinks } from "./nav-links";
+import { ThemeToggle } from "./theme-toggle";
 
 export function Nav({ email }: { email?: string | null }) {
   return (
@@ -25,13 +27,7 @@ export function Nav({ email }: { email?: string | null }) {
           <Link href="/" className="font-display" style={{ fontSize: "var(--fs-h3)", color: "var(--chrome-text)", textDecoration: "none" }}>
             arch-ive
           </Link>
-          <nav style={{ display: "flex", gap: "var(--s-4)" }}>
-            <NavLink href="/">Browse</NavLink>
-            <NavLink href="/matrix">Matrix</NavLink>
-            <NavLink href="/review">Review</NavLink>
-            <NavLink href="/ingest">Ingest</NavLink>
-            <NavLink href="/styleguide">Styleguide</NavLink>
-          </nav>
+          <NavLinks />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-3)" }}>
           {email && (
@@ -39,6 +35,7 @@ export function Nav({ email }: { email?: string | null }) {
               {email}
             </span>
           )}
+          <ThemeToggle />
           <form
             action={async () => {
               "use server";
@@ -63,17 +60,5 @@ export function Nav({ email }: { email?: string | null }) {
         </div>
       </div>
     </header>
-  );
-}
-
-function NavLink({ href, children }: { href: string; children: React.ReactNode }) {
-  return (
-    <Link
-      href={href}
-      className="font-display transition-fast"
-      style={{ fontSize: "var(--fs-label)", color: "var(--chrome-text)", textDecoration: "none" }}
-    >
-      {children}
-    </Link>
   );
 }

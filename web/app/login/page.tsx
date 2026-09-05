@@ -14,7 +14,10 @@ export default async function LoginPage({
     process.env.NODE_ENV !== "production" && process.env.AUTH_DEV_LOGIN === "true";
 
   return (
+    // id="main" so the skip link in app/layout.tsx has a target here too --
+    // this route is outside (protected), which is where that id otherwise lives.
     <main
+      id="main"
       style={{
         minHeight: "100dvh",
         display: "grid",

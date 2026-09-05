@@ -203,7 +203,9 @@ function ThemePanel({ theme }: { theme: "light" | "dark" }) {
 
 export default function StyleguidePage() {
   return (
-    <main style={{ background: "var(--n800)", minHeight: "100dvh", padding: "var(--s-6)" }}>
+    // A <div>, not a <main>: this page now sits inside (protected), whose
+    // layout already provides the one <main id="main"> the skip link targets.
+    <div style={{ background: "var(--n800)", minHeight: "100dvh", padding: "var(--s-6)" }}>
       <h1
         className="font-display"
         style={{ color: "var(--n100)", fontSize: "var(--fs-h1)", margin: "0 0 var(--s-6) 0" }}
@@ -220,6 +222,6 @@ export default function StyleguidePage() {
         <ThemePanel theme="light" />
         <ThemePanel theme="dark" />
       </div>
-    </main>
+    </div>
   );
 }

@@ -1,5 +1,6 @@
 import { requireSession } from "@/lib/session";
 import { listFrameworks, getMatrixDocuments, getMatrix } from "@/lib/queries";
+import { href } from "@/lib/links";
 import Link from "next/link";
 import { Mono } from "@/components/mono";
 import { StatusFlag } from "@/components/draft-wrapper";
@@ -23,9 +24,16 @@ export default async function MatrixPage({
   }
 
   const documents = await getMatrixDocuments(session.accountId, frameworkSlug);
-  const documentSlug = sp.document || documents[0]?.slug;
+  // Only honour the requested sheet if it belongs to THIS framework. Switching
+  // framework used to submit the previous framework's sheet, which is truthy,
+  // so the fallback was skipped and the page reported "No criteria found" for
+  // a combination that cannot exist.
+  const documentSlug = documents.some((d) => d.slug === sp.document)
+    ? sp.document
+    : documents[0]?.slug;
 
   const { levels, criteria, cells } = await getMatrix(session.accountId, frameworkSlug, documentSlug);
+  const matrixHref = href("/matrix", { framework: frameworkSlug, document: documentSlug });
 
   return (
     <div style={{ padding: "var(--s-6)" }}>
@@ -173,9 +181,9 @@ export default async function MatrixPage({
                             {cellItems.map((cell) => (
                               <li key={cell.knowledge_item_id}>
                                 <Link
-                                  href={`/item/${cell.knowledge_item_id}`}
+                                  href={`/item/${cell.knowledge_item_id}?from=matrix&ret=${encodeURIComponent(matrixHref)}`}
                                   className="font-body transition-fast"
-                                  style={{ fontSize: "var(--fs-sm)", color: "inherit", textDecoration: "none" }}
+                                  style={{ fontSize: "var(--fs-sm)", color: "inherit", textDecoration: "underline", textUnderlineOffset: "0.2em" }}
                                 >
                                   {cell.statement || cell.target_text}
                                 </Link>

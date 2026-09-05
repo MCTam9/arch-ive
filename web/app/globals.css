@@ -207,6 +207,37 @@ textarea {
   border: var(--border-width) solid var(--border);
 }
 
+/* ── interaction ────────────────────────────────────────────────────────
+   .transition-fast was applied to a dozen elements and animated nothing,
+   because the stylesheet had no :hover, :active or :disabled rule at all. A
+   result row that is a link has to look like one. */
+.card-link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}
+.card-link:hover,
+.card-link:focus-visible {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-hard);
+}
+
+/* A disabled control must not look like an enabled one. The review buttons
+   were rendered disabled for readers with an unchanged accent fill. */
+button:disabled,
+button[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: grayscale(1);
+}
+
+/* Links carry the accent so they read as links; --accent-strong was defined
+   in all four theme blocks and used nowhere. */
+.link {
+  color: var(--accent-strong);
+  text-underline-offset: 0.2em;
+}
+
 .text-muted {
   color: var(--text-muted);
 }

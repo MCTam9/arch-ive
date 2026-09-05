@@ -13,7 +13,18 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={fontVariables}>
+    <html lang="en" className={fontVariables} suppressHydrationWarning>
+      <head>
+        {/* Applies the stored theme before first paint. Without this the page
+            renders in the OS theme and then flips, which is worse than having
+            no toggle at all. It must be inline and synchronous in <head> —
+            anything deferred happens after the first frame. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{var t=localStorage.getItem('arch-ive-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}`,
+          }}
+        />
+      </head>
       <body>
         <a href="#main" className="skip-link font-display">
           Skip to content

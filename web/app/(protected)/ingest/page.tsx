@@ -58,9 +58,15 @@ export default async function IngestPage() {
                 {job.last_error && (
                   <p
                     className="font-mono"
+                    // Semantic tokens, not raw ramp values. This block set a
+                    // fixed near-white background and no colour, so in dark
+                    // mode it inherited near-white text: an error message that
+                    // was invisible exactly when you needed it. The same bug
+                    // was fixed on /login and left standing here.
                     style={{
-                      background: "var(--n200)",
-                      border: "var(--border-width) solid var(--n900)",
+                      background: "var(--surface-sunken)",
+                      color: "var(--text)",
+                      border: "var(--border-width) solid var(--border-strong)",
                       padding: "var(--s-2)",
                       fontSize: "var(--fs-sm)",
                       whiteSpace: "pre-wrap",
@@ -86,15 +92,28 @@ export default async function IngestPage() {
                         key={i}
                         className="font-mono"
                         title={s.error ?? undefined}
+                        // A failed chip was amber text on a fixed near-white
+                        // fill — about 1.4:1, unreadable. The band colours are
+                        // data encoding meant to be a FILL with near-black on
+                        // top, which is how they are used everywhere else.
                         style={{
                           fontSize: "var(--fs-micro)",
-                          padding: "2px var(--s-1)",
-                          border: "var(--border-width) solid var(--border)",
-                          background: s.status === "ok" ? "var(--surface)" : s.status === "failed" ? "var(--n200)" : "var(--surface-sunken)",
-                          color: s.status === "failed" ? "var(--level-2)" : "inherit",
+                          padding: "var(--s-1)",
+                          border: `var(--border-width) solid ${s.status === "failed" ? "var(--border-strong)" : "var(--border)"}`,
+                          background:
+                            s.status === "failed"
+                              ? "var(--level-2)"
+                              : s.status === "ok"
+                                ? "var(--surface)"
+                                : "var(--surface-sunken)",
+                          color: s.status === "failed" ? "var(--level-2-text)" : "var(--text)",
                         }}
                       >
+                        {/* The status is spelled out, not left to colour
+                            alone: every chip's visible label was the stage
+                            name, identical in all three states. */}
                         {s.stage}
+                        {s.status === "failed" ? " failed" : ""}
                         {s.duration_ms != null ? ` ${s.duration_ms}ms` : ""}
                       </li>
                     ))}

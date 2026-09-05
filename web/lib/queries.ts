@@ -103,16 +103,52 @@ export type BrowseItem = {
   content_status: string;
   review_status: string;
   document_slug: string;
+  document_title: string | null;
   doc_kind: string;
   page_index: number | null;
   printed_page_label: string | null;
+  /** Relevance, only when a query was given. Null in document order. */
+  score: number | null;
+  /** The matching chunk text with [[…]] around the hits. */
+  snippet: string | null;
+  total?: number;
 };
 
+export const BROWSE_PAGE_SIZE = 25;
+
+/** Browse results: ranked when there is a query, document order when not.
+ *
+ *  The search box used to run `title ILIKE '%q%' OR statement ILIKE ... OR
+ *  summary ILIKE ...` and then sort alphabetically by document slug — so
+ *  typing changed which rows appeared but never which came first, and body
+ *  text that lives in `chunk` and not in those three columns was unfindable.
+ *
+ *  This ranks against the GIN-indexed `chunk.tsv`, the same index
+ *  `tools/search.py` uses. Three legs, each tried only when the one before it
+ *  found nothing, all inside a single statement:
+ *
+ *    1. `websearch_to_tsquery` — phrases, negation, stemming.
+ *    2. OR-of-lexemes. Measured on this corpus: "embodied carbon 2030" matches
+ *       0 chunks under AND and 95 under OR, because no single chunk contains
+ *       all three terms. Without this fallback most real queries return
+ *       nothing, which is how a search feature comes to look broken.
+ *    3. ILIKE, which is the only leg that finds a code fragment or a prefix
+ *       that no tsquery will lex.
+ *
+ *  What this is not: `tools/search.py` fuses a pgvector leg by RRF, and that
+ *  is what lets it answer loosely-worded questions. A query vector has to come
+ *  from the same local bge-small model, which cannot run in a Vercel function,
+ *  so the web path is lexical only and the hybrid path stays with the MCP
+ *  server. It also cannot see the 398 of 1,169 chunks that carry no
+ *  knowledge_item_id.
+ */
 export async function listKnowledgeItems(
   accountId: string,
   filters: BrowseFilters,
-  limit = 80,
-): Promise<BrowseItem[]> {
+  opts: { limit?: number; offset?: number } = {},
+): Promise<{ items: BrowseItem[]; total: number }> {
+  const limit = Math.min(opts.limit ?? BROWSE_PAGE_SIZE, 100);
+  const offset = Math.max(opts.offset ?? 0, 0);
   return withAccount(accountId, async (client) => {
     const conditions: string[] = [];
     const params: unknown[] = [];
@@ -138,38 +174,115 @@ export async function listKnowledgeItems(
         "EXISTS (SELECT 1 FROM item_term it WHERE it.knowledge_item_id = ki.id AND it.term_id = ?)",
         filters.levelId,
       );
-    if (filters.q) {
-      const p = `%${filters.q}%`;
-      params.push(p, p, p);
-      const n = params.length;
-      conditions.push(
-        `(ki.title ILIKE $${n - 2} OR ki.statement ILIKE $${n - 1} OR ki.summary ILIKE $${n})`,
-      );
-    }
-
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-    params.push(limit);
 
-    const { rows } = await client.query<BrowseItem>(
-      `
-      SELECT ki.id, ki.item_type::text AS item_type, ki.title, ki.statement, ki.summary,
-             ki.content_status::text AS content_status, ki.review_status::text AS review_status,
-             d.slug AS document_slug, d.doc_kind::text AS doc_kind,
-             c.page_index, c.printed_page_label
-      FROM knowledge_item ki
-      JOIN source_document d ON d.id = ki.document_id
+    // Shared tail: the columns every row needs, plus the pre-LIMIT total, so
+    // the header count and the page come back in one statement.
+    const SELECT_COLUMNS = `
+      ki.id, ki.item_type::text AS item_type, ki.title, ki.statement, ki.summary,
+      ki.content_status::text AS content_status, ki.review_status::text AS review_status,
+      d.slug AS document_slug, d.title AS document_title, d.doc_kind::text AS doc_kind,
+      c.page_index, c.printed_page_label`;
+    const CITATION_JOIN = `
       LEFT JOIN LATERAL (
         SELECT page_index, printed_page_label FROM citation
         WHERE citation.knowledge_item_id = ki.id
         ORDER BY page_index NULLS LAST LIMIT 1
-      ) c ON true
-      ${where}
-      ORDER BY d.slug, ki.item_type, ki.title NULLS LAST
-      LIMIT $${params.length}
+      ) c ON true`;
+
+    if (!filters.q) {
+      params.push(limit, offset);
+      const { rows } = await client.query(
+        `SELECT ${SELECT_COLUMNS}, NULL::float8 AS score, NULL::text AS snippet,
+                count(*) OVER ()::int AS total
+           FROM knowledge_item ki
+           JOIN source_document d ON d.id = ki.document_id
+           ${CITATION_JOIN}
+           ${where}
+          ORDER BY d.slug, ki.item_type, ki.title NULLS LAST
+          LIMIT $${params.length - 1} OFFSET $${params.length}`,
+        params,
+      );
+      return { items: rows as BrowseItem[], total: rows[0]?.total ?? 0 };
+    }
+
+    // The facet predicates are written against ki/d and have to apply inside
+    // the ranking legs, not after them: rank-then-filter would return an empty
+    // page whenever the top matches happened to miss the chosen facet.
+    params.push(filters.q);
+    const q = `$${params.length}`;
+    params.push(`%${filters.q}%`);
+    const like = `$${params.length}`;
+    params.push(limit, offset);
+    const limitP = `$${params.length - 1}`;
+    const offsetP = `$${params.length}`;
+
+    const { rows } = await client.query(
+      `
+      WITH base AS (
+        SELECT ch.id AS chunk_id, ch.tsv, ch.text, ki.id AS item_id
+          FROM chunk ch
+          JOIN knowledge_item ki ON ki.id = ch.knowledge_item_id
+          JOIN source_document d ON d.id = ki.document_id
+         ${where}
+      ),
+      -- OR-of-lexemes, built in SQL so there is no client-side tokenising to
+      -- keep in step with the 'english' dictionary.
+      or_query AS (
+        SELECT NULLIF(string_agg(lexeme, ' | '), '')::tsquery AS tsq
+          FROM unnest(to_tsvector('english', ${q})) AS lexeme
+      ),
+      fts AS (
+        SELECT chunk_id, item_id, text,
+               ts_rank(tsv, websearch_to_tsquery('english', ${q})) AS rank
+          FROM base
+         WHERE tsv @@ websearch_to_tsquery('english', ${q})
+      ),
+      fts_or AS (
+        SELECT b.chunk_id, b.item_id, b.text, ts_rank(b.tsv, o.tsq) AS rank
+          FROM base b CROSS JOIN or_query o
+         WHERE NOT EXISTS (SELECT 1 FROM fts)
+           AND o.tsq IS NOT NULL AND b.tsv @@ o.tsq
+      ),
+      literal AS (
+        SELECT b.chunk_id, b.item_id, b.text, 0.0::float4 AS rank
+          FROM base b
+         WHERE NOT EXISTS (SELECT 1 FROM fts)
+           AND NOT EXISTS (SELECT 1 FROM fts_or)
+           AND b.text ILIKE ${like}
+      ),
+      hits AS (
+        SELECT * FROM fts UNION ALL SELECT * FROM fts_or UNION ALL SELECT * FROM literal
+      ),
+      -- One row per item, scored by its best chunk. max(), not sum(): summing
+      -- would rank a long item above a precise one for being long.
+      per_item AS (
+        SELECT item_id,
+               max(rank) AS score,
+               (array_agg(text ORDER BY rank DESC))[1] AS best_text
+          FROM hits GROUP BY item_id
+      ),
+      page AS (
+        SELECT p.*, count(*) OVER ()::int AS total
+          FROM per_item p
+         ORDER BY p.score DESC, p.item_id
+         LIMIT ${limitP} OFFSET ${offsetP}
+      )
+      SELECT ${SELECT_COLUMNS}, pg.score, pg.total,
+             -- StartSel/StopSel are plain markers, split in the page. Returning
+             -- HTML here would mean dangerouslySetInnerHTML on corpus text.
+             ts_headline('english', pg.best_text,
+                         websearch_to_tsquery('english', ${q}),
+                         'MaxFragments=1,MaxWords=28,MinWords=10,StartSel=[[,StopSel=]]') AS snippet
+        FROM page pg
+        JOIN knowledge_item ki ON ki.id = pg.item_id
+        JOIN source_document d ON d.id = ki.document_id
+        ${CITATION_JOIN}
+       ORDER BY pg.score DESC, ki.id
       `,
       params,
     );
-    return rows;
+    return { items: rows as BrowseItem[], total: rows[0]?.total ?? 0 };
   });
 }
 
@@ -257,7 +370,7 @@ export type ItemDetail = {
     width_pt: number | null;
     height_pt: number | null;
   }[];
-  terms: { taxonomy_id: string; label: string }[];
+  terms: { id: string; taxonomy_id: string; label: string }[];
   // per-scope applicability (e.g. "Design-Build Contractor", "Main
   // Contractor") for requirement items — see requirement_scope /
   // requirement_scope_applicability in db/schema.sql. Populated only when
@@ -360,7 +473,9 @@ export async function getKnowledgeItem(
     );
 
     const terms = await client.query(
-      `SELECT tt.taxonomy_id, tt.label
+      // tt.id comes along so the item page can link each facet back into a
+      // filtered browse — the chips used to be inert text.
+      `SELECT tt.id, tt.taxonomy_id, tt.label
        FROM item_term it JOIN taxonomy_term tt ON tt.id = it.term_id
        WHERE it.knowledge_item_id = $1
        ORDER BY tt.taxonomy_id`,
