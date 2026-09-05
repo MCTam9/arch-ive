@@ -77,3 +77,23 @@ extracted value and the true value.
   cannot find the figure.
 - **Never quote a figure you have only read via an agent's summary.** Confirm
   it against the page yourself, at the coordinate level.
+
+## Bulk operations on the queue
+
+```sh
+python -m tools.review_queue --status
+python -m tools.review_queue --approve-all [--document <slug>] --yes
+python -m tools.review_queue --reset --yes        # approved -> pending
+```
+
+Approving in bulk asserts that a person checked those records, and that is
+exactly what has not happened — the duplicated parent nodes, the mis-routed
+`doc_kind` and the role scope that was two codes short were all found by
+comparing a record against the page it came from. Treat a bulk approval as
+clearing the queue to a known starting state, not as verification.
+
+It is reversible, and it does not change what search returns: `tools/search.py`
+and `tools/mcp_server.py` only ever exclude `rejected`. Every item gets the
+same `audit_log` row the web UI writes (`review:approved`), so a later reviewer
+can tell a bulk pass from a considered one by the timestamps — 771 rows sharing
+a single timestamp to the microsecond is not 771 human decisions.
