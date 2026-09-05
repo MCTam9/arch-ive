@@ -4,6 +4,42 @@
 can all use, with row-level security actually enforced rather than merely
 declared.
 
+## Migrations
+
+`db/schema.sql` is the current shape of the database and is applied whole to a
+fresh one. It is not a history, so a change to an existing database needs a
+file of its own:
+
+```
+db/migrate/<YYYY-MM-DD>_<what>.sql
+```
+
+Rules that make this survivable rather than a second source of truth:
+
+- **Edit `db/schema.sql` in the same commit.** A migration that is not also in
+  the schema means the next fresh database differs from the live ones, and the
+  test database — built from `schema.sql` — stops matching what the code runs
+  against.
+- **Idempotent statements only** (`ADD COLUMN IF NOT EXISTS`,
+  `CREATE INDEX IF NOT EXISTS`), so re-applying is safe and a partial failure
+  can be retried.
+- **Apply to every database**, local and Neon, in the same sitting. A column
+  that exists on one is a production-only failure nothing local can reproduce.
+- **Run as the owner, not `arch_app`.** `ALTER TABLE` needs ownership; the app
+  role gets `must be owner of table` and nothing else. Locally that is
+  `postgres`; on Neon it is `NEON_ADMIN_URL`.
+
+```sh
+python3 - <<'EOF'
+import os, pathlib, psycopg
+from tools import env; env.load_env()
+sql = pathlib.Path("db/migrate/<file>.sql").read_text()
+for dsn in ("postgresql://postgres:dev@localhost:55432/postgres", os.environ["NEON_ADMIN_URL"]):
+    with psycopg.connect(dsn) as c:
+        c.execute(sql); c.commit()
+EOF
+```
+
 ## Tools
 
 | | |

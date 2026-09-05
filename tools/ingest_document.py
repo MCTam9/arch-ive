@@ -22,6 +22,7 @@ Two things this corpus breaks a naive implementation on, both handled here:
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 import subprocess
@@ -137,10 +138,31 @@ def _printed_page_label(page: "pymupdf.Page") -> str | None:
 
 _TARGET_WIDTH_PX = 1400
 _WEBP_QUALITY = 75
+_PAGES_DIR = Path(".tmp") / "pages"
+
+
+def _object_key(out_path: Path) -> str:
+    """Local render path -> the object key stored in the database.
+
+    One definition, matching tools/upload_page_images.py's _key_for(), because
+    a key that resolves on one database and not the other is a broken image
+    that only appears in production.
+    """
+    return "pages/" + out_path.relative_to(_PAGES_DIR).as_posix()
 
 
 def _render_page_image(page: "pymupdf.Page", out_dir: Path, page_index: int) -> str | None:
-    """Render to WebP (~1400px wide) under out_dir. Returns the file's relative-to-repo path."""
+    """Render to WebP (~1400px wide) under out_dir. Returns the OBJECT KEY.
+
+    The key, not the path. It used to return `str(out_path)` -- the local
+    `.tmp/pages/<uuid>/00001.webp` -- while every consumer expects the R2 key
+    `pages/<uuid>/00001.webp`: tools/upload_page_images.py strips the prefix at
+    upload time, the web route matches source_page.page_image_key verbatim, and
+    workflows/deploy_web.md states the convention outright. All 806 live rows
+    hold the key form, so the mismatch never showed; the next document ingested
+    would simply have had an unresolvable image key, on both databases, and the
+    only symptom is a missing page scan.
+    """
     rect = page.rect
     if rect.width <= 0:
         return None
@@ -164,7 +186,7 @@ def _render_page_image(page: "pymupdf.Page", out_dir: Path, page_index: int) -> 
                 capture_output=True,
             )
             if result.returncode == 0 and out_path.exists():
-                return str(out_path)
+                return _object_key(out_path)
         except Exception:
             pass
         finally:
@@ -174,7 +196,7 @@ def _render_page_image(page: "pymupdf.Page", out_dir: Path, page_index: int) -> 
     out_path = out_dir / f"{stem}.png"
     try:
         pix.save(out_path)
-        return str(out_path)
+        return _object_key(out_path)
     except Exception:
         return None
 
@@ -353,7 +375,7 @@ def extract_pages(conn: psycopg.Connection, document_id: str, path: Path) -> int
     if path.suffix.lower() != ".pdf":
         return 0  # xlsx has no pages; its content lives in spreadsheet_cell
 
-    out_dir = Path(".tmp") / "pages" / str(document_id)
+    out_dir = _PAGES_DIR / str(document_id)
     placeholder_count = 0
     total = 0
 
@@ -402,7 +424,13 @@ def extract_pages(conn: psycopg.Connection, document_id: str, path: Path) -> int
             )
             page_id = page_row["id"]
 
-            conn.execute("DELETE FROM source_asset WHERE page_id = %s", (page_id,))
+            # Upsert on (page_id, sha256) rather than the delete-then-insert
+            # this used to be. The blanket DELETE was correct while nothing but
+            # this function wrote to source_asset, and destroys a figure
+            # description the moment something does -- silently, re-creating the
+            # row empty beside it. The hash of the decoded bytes is the asset's
+            # identity: same image, same row, across extraction runs.
+            seen: list[str] = []
             try:
                 images = page.get_images(full=True)
             except Exception:
@@ -413,12 +441,57 @@ def extract_pages(conn: psycopg.Connection, document_id: str, path: Path) -> int
                     rects = page.get_image_rects(xref)
                 except Exception:
                     rects = []
+                # Only the first placement is recorded. A graphic drawn several
+                # times on one page (a repeated logo) is one row, and a NULL
+                # bbox is a real state: get_image_rects comes back empty for
+                # pattern and SMask-only xrefs, and the row is still worth
+                # keeping because the image is still on the page.
                 bbox = [round(v, 2) for v in rects[0]] if rects else None
-                conn.execute(
-                    """INSERT INTO source_asset (page_id, bbox)
-                       VALUES (%s, %s)""",
-                    (page_id, bbox),
-                )
+                try:
+                    sha = hashlib.sha256(doc.extract_image(xref)["image"]).hexdigest()
+                except Exception:
+                    sha = None
+                if sha is not None:
+                    seen.append(sha)
+                # Adopt a pre-sha256 row for the same box before inserting.
+                # Without this the guard below preserves the old row and the
+                # insert adds a hashed twin beside it, so every described asset
+                # ends up duplicated on the first re-ingest. Matching on bbox is
+                # sound here because a row's box is exactly what identified it
+                # before the hash existed.
+                adopted = conn.execute(
+                    "UPDATE source_asset SET sha256 = %s WHERE page_id = %s "
+                    # The cast is required: bbox is numeric(9,2)[] and psycopg
+                    # sends a Python float list as double precision[], for which
+                    # Postgres has no equality operator against numeric[].
+                    "AND sha256 IS NULL AND bbox IS NOT DISTINCT FROM %s::numeric(9,2)[]",
+                    (sha, page_id, bbox),
+                ).rowcount if sha is not None else 0
+                if not adopted:
+                    conn.execute(
+                        """INSERT INTO source_asset (page_id, sha256, bbox)
+                           VALUES (%s, %s, %s)
+                           ON CONFLICT (page_id, sha256) WHERE sha256 IS NOT NULL
+                           DO UPDATE SET bbox = EXCLUDED.bbox""",
+                        (page_id, sha, bbox),
+                    )
+            # Anything left on this page that the document no longer contains.
+            #
+            # Two guards, not one. The hash match handles rows written since
+            # sha256 existed. The `vlm_description IS NULL AND caption IS NULL`
+            # clause handles everything older: those rows cannot be matched by
+            # hash, so without it the first re-ingest after a describe run would
+            # delete exactly the assets someone had spent money describing. A
+            # stale row for a figure genuinely removed from the document is a
+            # visible, fixable wart; silently destroying generated content is
+            # neither. Nothing this stage did not write is this stage's to
+            # delete.
+            conn.execute(
+                "DELETE FROM source_asset WHERE page_id = %s "
+                "AND (sha256 IS NULL OR NOT (sha256 = ANY(%s))) "
+                "AND vlm_description IS NULL AND caption IS NULL",
+                (page_id, seen),
+            )
 
     conn.execute(
         "UPDATE source_document SET page_count = %s WHERE id = %s",

@@ -278,6 +278,86 @@ def test_extract_pages_never_raises_and_is_idempotent():
     assert count == 2
 
 
+def test_re_running_pages_preserves_generated_figure_content():
+    """A description costs a model call to produce, and the pages stage must not
+    destroy one.
+
+    extract_pages used to rebuild source_asset wholesale
+    (`DELETE FROM source_asset WHERE page_id`), which was correct while nothing
+    else wrote to that table. The moment tools/describe_figures.py did, the next
+    re-ingest -- which workflows/ingest_documents.md actively encourages after
+    improving an extractor -- would delete the described rows and re-create them
+    empty. The row survives, so nothing looks broken.
+
+    This also pins the no-duplicate half: a pre-sha256 row is adopted in place,
+    not preserved alongside a hashed twin.
+    """
+    slug, path = CRIB
+    document_id = _register(slug, path, "crib_sheet")
+
+    with db.transaction() as conn:
+        asset_id = db.scalar(
+            conn,
+            "SELECT a.id FROM source_asset a JOIN source_page p ON p.id = a.page_id "
+            "WHERE p.document_id = %s LIMIT 1",
+            (document_id,),
+        )
+        assert asset_id, "the crib sheet has figures; extract_pages should have found some"
+        conn.execute(
+            "UPDATE source_asset SET vlm_description = %s, vlm_model = %s, image_key = %s "
+            "WHERE id = %s",
+            ("a described figure", "test-model", "figures/x/y.webp", asset_id),
+        )
+        before = db.scalar(
+            conn,
+            "SELECT count(*) FROM source_asset a JOIN source_page p ON p.id = a.page_id "
+            "WHERE p.document_id = %s",
+            (document_id,),
+        )
+
+    _register(slug, path, "crib_sheet")  # the re-ingest
+
+    with db.connect() as conn:
+        row = db.one(
+            conn,
+            "SELECT vlm_description, image_key FROM source_asset WHERE id = %s",
+            (asset_id,),
+        )
+        after = db.scalar(
+            conn,
+            "SELECT count(*) FROM source_asset a JOIN source_page p ON p.id = a.page_id "
+            "WHERE p.document_id = %s",
+            (document_id,),
+        )
+    assert row is not None, "the described asset row was deleted by a re-ingest"
+    assert row["vlm_description"] == "a described figure"
+    assert row["image_key"] == "figures/x/y.webp"
+    assert after == before, f"re-ingest duplicated assets: {before} -> {after}"
+
+
+def test_page_image_key_is_the_object_key_not_a_local_path():
+    """Every consumer -- upload_page_images, the web route, deploy_web.md --
+    expects `pages/<uuid>/<n>.webp`. _render_page_image returned the local
+    `.tmp/pages/...` path instead, and the only symptom would have been a
+    missing page scan on the next document ingested."""
+    slug, path = CRIB
+    document_id = _register(slug, path, "crib_sheet")
+    with db.connect() as conn:
+        keys = [
+            r["page_image_key"]
+            for r in db.all_rows(
+                conn,
+                "SELECT page_image_key FROM source_page WHERE document_id = %s "
+                "AND page_image_key IS NOT NULL",
+                (document_id,),
+            )
+        ]
+    assert keys, "the crib sheet should have rendered page images"
+    for key in keys:
+        assert key.startswith("pages/"), key
+        assert ".tmp" not in key, key
+
+
 # ── build_structure ───────────────────────────────────────────────────────
 
 

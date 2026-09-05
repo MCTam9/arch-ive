@@ -868,8 +868,15 @@ def write_extraction(conn: psycopg.Connection, document_id: str, extraction: Ext
     reqscope_count = _upsert_requirement_scopes(
         conn, getattr(extraction, "requirement_scopes", []) or [], framework_slug_map)
 
-    # idempotency: clear this document's prior extraction output
-    conn.execute("DELETE FROM chunk WHERE document_id = %s", (document_id,))
+    # idempotency: clear this document's prior extraction output.
+    #
+    # `asset_id IS NULL` keeps figure chunks, which this stage did not write and
+    # has no business deleting: they come from a model reading a cropped figure,
+    # cost real money or real time to produce, and are keyed to source_asset
+    # rather than to any knowledge item. Without the guard, re-running an
+    # improved extractor -- which the workflow actively encourages -- throws
+    # them away as a side effect.
+    conn.execute("DELETE FROM chunk WHERE document_id = %s AND asset_id IS NULL", (document_id,))
     conn.execute("DELETE FROM external_reference WHERE from_document_id = %s", (document_id,))
     conn.execute("DELETE FROM knowledge_item WHERE document_id = %s", (document_id,))
 

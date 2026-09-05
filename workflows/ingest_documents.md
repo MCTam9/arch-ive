@@ -86,6 +86,70 @@ nothing to show that it is wrong.
 
 `chunk.tsv` is a generated column and needs no separate step.
 
+## Figures
+
+`tools/ingest_document.py` locates every raster figure on a page and writes a
+`source_asset` row with its bounding box. It does not crop them, and until
+`tools/crop_figures.py` existed nothing ever had: `image_key`, `caption` and
+`vlm_description` were NULL on all 1,763 rows.
+
+```sh
+python3 -m tools.crop_figures --document typology-multifamily
+python3 -m tools.crop_figures --limit 20 --no-upload   # local only, nothing recorded
+python3 -m tools.crop_figures --verify                 # every DB key resolves in R2
+python3 -m tools.describe_figures --status
+```
+
+**`--min-pt` is the argument that matters.** Only 898 of the 1,763 assets are
+at least 100pt on both sides; 654 are under 40pt on a side, and
+`framework-vol-e2` contributes 426 of those out of 453 assets. Those are
+bullets, rules, icons and logos. Cropping them costs storage and describing
+them puts "a small dark circle" into a corpus people search for guidance. The
+default is 100pt on purpose.
+
+Crops come from the **original PDF**, not the page render — a render is
+~1400px across a whole A3 sheet, so a figure cut out of it is unreadable. The
+original is restored through `tools/fetch_original.py`, which is the only
+sanctioned download path: it tries SOURCE_DIR, falls back to the rclone crypt
+remote, verifies the SHA-256, and writes the `audit_log` row that says a
+document left the archive. Never reach for the files directly; a second,
+unlogged download path is exactly what `workflows/archive_and_restore.md`
+exists to prevent.
+
+Coordinates need no conversion. `source_asset.bbox`,
+`source_page.width_pt/height_pt` and `pymupdf.Page.rect` are all top-left-origin
+PDF points.
+
+### Descriptions are generated text, and must stay marked as such
+
+`tools/describe_figures.py` is a **writer, not an API client**, deliberately:
+the producer may be a Claude Code session, the Claude API, Bedrock in an EU
+region, or a local model, and all four hand back the same thing. It takes a
+JSONL of `{asset_id, description, model}` and refuses a line with no model —
+provenance is not optional for text no document contains.
+
+`content_status` cannot carry this distinction: its values describe how
+finished the *source* is, not who wrote the text. That is why `vlm_model` and
+`vlm_described_at` live on `source_asset`, and why anything rendering a
+description has to say where it came from. Rule 4 in `web/app/globals.css` —
+provenance is visible — applies with more force here than anywhere else in the
+system, because a plausible sentence about a drawing is far easier to mistake
+for guidance than lorem ipsum is.
+
+### Two idempotency traps this area used to have
+
+Both are fixed; both would silently destroy generated content, which is the
+worst failure mode available here because the row survives, empty.
+
+- `ingest_document.extract_pages` rebuilt `source_asset` wholesale
+  (`DELETE FROM source_asset WHERE page_id`) on every `pages` run. It now
+  upserts on `(page_id, sha256)` — the hash of the decoded image bytes is the
+  asset's identity across runs. Rows predating the column have a NULL hash,
+  cannot be matched, and are replaced.
+- `write_extraction` cleared every chunk for a document on re-extraction. It
+  now spares `asset_id IS NOT NULL`, because figure chunks are not that
+  stage's to delete.
+
 ## Edge cases and what to do
 
 - **A large file is picked up mid-copy.** Should not happen: a file is only

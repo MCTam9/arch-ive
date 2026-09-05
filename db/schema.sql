@@ -116,11 +116,19 @@ CREATE TABLE source_asset (
   page_id         uuid NOT NULL REFERENCES source_page(id) ON DELETE CASCADE,
   code            text,                        -- 'FIGURE 5.1.2.1'
   caption         text,
-  vlm_description text,
-  bbox            numeric(9,2)[],              -- [x0,y0,x1,y1]
-  image_key       text
+  vlm_description text,                        -- generated, never source text
+  vlm_model       text,                        -- which model, so a re-run can target one
+  vlm_described_at timestamptz,
+  sha256          text,                        -- of the decoded image bytes
+  bbox            numeric(9,2)[],              -- [x0,y0,x1,y1], top-left origin, PDF points
+  image_key       text                         -- 'figures/<document uuid>/<asset uuid>.webp'
 );
 CREATE INDEX ON source_asset (page_id);
+-- The natural key. Without it ingest_document had to rebuild this table
+-- wholesale on every `pages` run, which is fine while nothing but the
+-- extractor writes here and destructive the moment a description does.
+CREATE UNIQUE INDEX source_asset_page_sha
+  ON source_asset (page_id, sha256) WHERE sha256 IS NOT NULL;
 
 CREATE TABLE spreadsheet_sheet (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
