@@ -39,13 +39,24 @@ export default async function LoginPage({
           className="font-display"
           style={{
             fontSize: "var(--fs-h1)",
-            // the strapline under this used to carry the gap to the button
-            margin: "0 0 var(--s-6)",
+            // The strapline below carries the gap to the button, so the
+            // wordmark only needs to clear its own descender.
+            margin: "0 0 var(--s-2)",
             color: "var(--text)",
           }}
         >
           arch-ive
         </h1>
+
+        {/* Body font, not the bitmap face: this is a sentence, and Rule 1
+            keeps the display face on chrome. It is also the only thing on the
+            page that says what you are signing in to. */}
+        <p
+          className="font-body text-muted"
+          style={{ fontSize: "var(--fs-sm)", margin: "0 0 var(--s-6)" }}
+        >
+          Architecture knowledge base
+        </p>
 
         {error && (
           <p
