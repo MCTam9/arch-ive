@@ -25,6 +25,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Json
 
+from tools.chunk_pages import split as _split_page
 from tools.pipeline import Extraction, Item, Node
 
 # ── subtype tables, keyed by Item.item_type ──────────────────────────────
@@ -795,6 +796,16 @@ def _write_items(
 
 
 def _write_page_chunks(conn: psycopg.Connection, document_id: str, covered_pages: set[int]) -> int:
+    """A chunk for every page no item was extracted from, so its text is still
+    findable -- in windows, not whole.
+
+    This used to insert the entire page as one chunk. The embedding model has a
+    512-token window and a third of the pages exceeded it, so their vectors
+    described only the top of the page while the row looked indexed. The
+    windowing rule lives in tools/chunk_pages.py, which is also the tool that
+    re-windows an existing corpus; keeping one implementation means the two
+    cannot drift into disagreeing about what a page chunk is.
+    """
     pages = conn.execute(
         "SELECT page_index, text FROM source_page "
         "WHERE document_id = %s AND content_status = 'real'",
@@ -804,14 +815,13 @@ def _write_page_chunks(conn: psycopg.Connection, document_id: str, covered_pages
     for p in pages:
         if p["page_index"] in covered_pages:
             continue
-        if not p["text"] or not p["text"].strip():
-            continue
-        conn.execute(
-            """INSERT INTO chunk (document_id, page_from, page_to, text, content_status)
-               VALUES (%s,%s,%s,%s,'real')""",
-            (document_id, p["page_index"], p["page_index"], p["text"]),
-        )
-        n += 1
+        for ordinal, window in enumerate(_split_page(p["text"])):
+            conn.execute(
+                """INSERT INTO chunk (document_id, page_from, page_to, ordinal, text, content_status)
+                   VALUES (%s,%s,%s,%s,%s,'real')""",
+                (document_id, p["page_index"], p["page_index"], ordinal, window),
+            )
+            n += 1
     return n
 
 

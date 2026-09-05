@@ -180,6 +180,37 @@ away from being excluded whenever figures reach the index. The share varies
 enormously by section — 0 in the typology drawing chapters, 35 of 40 in
 landscape materials — so it cannot be predicted per document.
 
+### Page text is windowed, not stored whole
+
+A page no item was extracted from becomes a chunk so its text stays findable.
+That chunk used to be the entire page — median 2,186 characters, longest
+13,642 — against an embedding model with a **512-token window**. 129 of the 398
+page chunks (32%) exceeded it, so their vectors described only the top of the
+page while the row looked perfectly indexed. Full-text was never affected;
+`tsv` covers the whole string, which is why this hid for so long.
+
+```sh
+python3 -m tools.chunk_pages              # dry run
+python3 -m tools.chunk_pages --yes
+python3 -m tools.embed_chunks
+python3 -m tools.chunk_pages --status
+```
+
+- **The budget is tokens, not characters.** Prose in this corpus runs to 6.5
+  characters per token; a page of dimensions and codes runs to 1.3. A fixed
+  character window sized for prose still overflowed on the densest pages —
+  which are exactly the pages whose numbers people search for. Each page gets a
+  character budget derived from its own density, estimated without loading the
+  model (`estimate_tokens`, worst measured underestimate 3%).
+- **Windows overlap by ~200 characters.** Not redundancy: a sentence that
+  straddles a boundary would otherwise be in neither window's vector.
+- **Search groups the windows back into one result per page**, scored by the
+  best window, so a long page returns once rather than flooding the list with
+  its own fragments — and a match deep in a page now ranks on its own merits.
+- `tools/write_extraction.py` calls the same `split()`, so a fresh ingest and a
+  re-window of the existing corpus cannot drift apart about what a page chunk
+  is. `chunk.ordinal` finally carries something.
+
 ### Getting the descriptions into the index
 
 A description sitting on `source_asset` is write-only data: it is in no index,

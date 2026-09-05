@@ -397,11 +397,14 @@ export async function listKnowledgeItems(
       WITH base AS (
         SELECT ch.id AS chunk_id, ch.tsv, ch.text, ch.document_id, ch.page_from,
                ki.id AS item_id, ch.asset_id,
-               -- An item groups all of its chunks into one result; a page or
-               -- figure chunk is a result on its own. Grouping used to be on
-               -- item_id alone, which gave a chunk with no item nowhere to
-               -- live -- it was not merely filtered out, it had no key.
-               coalesce(ki.id, ch.id) AS result_id,
+               -- What counts as one result. An item groups all of its chunks;
+               -- a figure is its own; a page groups the windows it was split
+               -- into, so a long page returns once, scored by its best window,
+               -- instead of flooding the list with its own fragments.
+               -- Grouping used to be on item_id alone, which gave a chunk with
+               -- no item nowhere to live -- not filtered out, simply keyless.
+               coalesce(ki.id::text, ch.asset_id::text,
+                        ch.document_id::text || ':' || ch.page_from) AS result_id,
                CASE WHEN ki.id IS NOT NULL      THEN 'item'
                     WHEN ch.asset_id IS NOT NULL THEN 'figure'
                     ELSE 'page' END AS kind,
@@ -464,7 +467,7 @@ export async function listKnowledgeItems(
          ORDER BY p.score DESC, p.result_id
          LIMIT ${limitP} OFFSET ${offsetP}
       )
-      SELECT pg.result_id::text AS id,
+      SELECT pg.result_id AS id,
              pg.kind,
              pg.asset_id::text AS asset_id,
              sp.id::text AS page_id,
