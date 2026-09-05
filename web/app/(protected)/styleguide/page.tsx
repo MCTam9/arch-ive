@@ -188,8 +188,11 @@ function ThemePanel({ theme }: { theme: "light" | "dark" }) {
         <p className="font-body text-muted" style={{ fontSize: "var(--fs-sm)", margin: "0 0 var(--s-4)" }}>
           Rule 2: state transitions only, ≤160ms. Movement is mechanical — an
           object travels into its own hard shadow when pressed, never scales or
-          fades. Tab through these as well as hovering them; focus and hover
-          are deliberately the same treatment.
+          fades. One geometry per state: focus draws the ring, hover casts the
+          shadow, press travels into it. Colour may change in any of the three.
+          Tab through these as well as hovering them — a focused control shows
+          the outline and nothing else, so the ring never competes with a
+          second square edge.
         </p>
 
         <Row label="button">

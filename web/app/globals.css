@@ -52,6 +52,19 @@ textarea {
   color: var(--text-on-accent);
 }
 
+/* One geometry per state, and focus owns the ring.
+
+   Every control used to take a hard offset shadow on :focus-visible as well as
+   this outline, which drew two square rings around the same box — one tight
+   and green, one offset and black. They read as a rendering fault rather than
+   as a state. The division now is: focus draws the ring, hover casts the
+   shadow, press travels into it. Colour may change in any of the three;
+   geometry belongs to exactly one.
+
+   The outline is the half worth keeping. It is the only focus indicator that
+   survives forced-colors mode, it follows the border box without needing a
+   matching shadow-colour per theme, and it is what a keyboard user is looking
+   for. */
 :focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
@@ -296,8 +309,7 @@ textarea {
   padding: var(--s-1) var(--s-2);
 }
 
-.btn:hover,
-.btn:focus-visible {
+.btn:hover {
   box-shadow: var(--shadow-hard);
 }
 .btn-primary:hover,
@@ -372,6 +384,8 @@ a.chip:hover,
 a.chip:focus-visible {
   background: var(--accent);
   color: var(--accent-text);
+}
+a.chip:hover {
   box-shadow: var(--shadow-hard-press);
 }
 a.chip:active {
@@ -453,10 +467,12 @@ a.chip:focus-visible .chip-x {
 .field:hover {
   border-color: var(--accent-strong);
 }
+/* Recolouring the field's own edge is not a second ring — it is the same
+   border. The shadow that used to sit here was, and it fought the outline on
+   every focused input and select. */
 .field:focus,
 .field:focus-visible {
   border-color: var(--accent-strong);
-  box-shadow: var(--shadow-hard-press);
 }
 
 /* ── text links ───────────────────────────────────────────────────────────
@@ -488,6 +504,8 @@ a.chip:focus-visible .chip-x {
 .card-link:hover,
 .card-link:focus-visible {
   border-color: var(--border-strong);
+}
+.card-link:hover {
   box-shadow: var(--shadow-hard);
   transform: translate(calc(var(--press-offset) * -1), calc(var(--press-offset) * -1));
 }
@@ -508,7 +526,6 @@ a.chip:focus-visible .chip-x {
   a.chip:active,
   .tab:active,
   .card-link:hover,
-  .card-link:focus-visible,
   .card-link:active {
     transform: none;
   }
@@ -541,5 +558,4 @@ a.chip:focus-visible .chip-x {
 .skip-link:focus,
 .skip-link:focus-visible {
   transform: translateY(0);
-  box-shadow: var(--shadow-hard);
 }
