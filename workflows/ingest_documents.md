@@ -213,10 +213,11 @@ python3 -m tools.chunk_pages --status
 
 ### Getting the descriptions into the index
 
-A description sitting on `source_asset` is write-only data: it is in no index,
-so the numbers inside a benchmark table that exists only as a picture cannot be
-found by searching for them. `tools/chunk_figures.py` puts them in `chunk`,
-where the generated `tsv` and `tools/embed_chunks.py` do the rest.
+A description that stops at `source_asset` is write-only data: it sits in no
+index, so the numbers inside a benchmark table that exists only as a picture
+cannot be found by searching for them. `tools/chunk_figures.py` is the step that
+puts them in `chunk`, where the generated `tsv` and `tools/embed_chunks.py` do
+the rest. Describing figures without running it leaves the work invisible.
 
 ```sh
 python3 -m tools.chunk_figures            # dry run

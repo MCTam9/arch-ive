@@ -94,7 +94,7 @@ export async function getFacetOptions(accountId: string): Promise<FacetOptions> 
 export type HomeSummary = {
   topics: TaxonomyTerm[];
   itemTypes: { id: string; n: number }[];
-  totals: { items: number; documents: number; pages: number; chunks: number };
+  totals: { items: number; documents: number; pages: number; figures: number };
 };
 
 // The home page in one round-trip, for the same reason getFacetOptions is one
@@ -134,7 +134,12 @@ export async function getHomeSummary(accountId: string): Promise<HomeSummary> {
           'items',     (SELECT count(*)::int FROM knowledge_item),
           'documents', (SELECT count(*)::int FROM source_document WHERE is_current),
           'pages',     (SELECT count(*)::int FROM source_page),
-          'chunks',    (SELECT count(*)::int FROM chunk)
+          -- Indexed figures, not described ones. 898 carry a description and
+          -- 1,763 assets exist, but 114 are decorative and never reach the
+          -- index, so 784 is the number a search can actually return. Counting
+          -- the chunks rather than the descriptions means the line cannot
+          -- drift from what the index holds.
+          'figures',   (SELECT count(*)::int FROM chunk WHERE asset_id IS NOT NULL)
         )
       ) AS summary
     `);

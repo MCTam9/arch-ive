@@ -88,16 +88,18 @@ export default async function HomePage({
         </button>
       </form>
 
-      {/* Counts, not adjectives. Figures are deliberately absent: 898 of them
-          carry a description, but search cannot reach any of it (queries.ts
-          inner-joins knowledge_item), and advertising them on the page whose
-          job is to launch a search would promise something it does not do. */}
+      {/* Counts, not adjectives -- and specifically counts of what the box
+          below can return. Figures used to be left out of this line because
+          search could not reach them; it can now, so leaving them out would
+          under-report the corpus by 784 searchable things. The chunk count
+          went the other way and left the line: it is an index detail, and a
+          visitor cannot search for a chunk or land on one. */}
       <Mono
         className="text-muted"
         style={{ display: "block", textAlign: "center", fontSize: "var(--fs-sm)", marginBottom: "var(--s-10)" }}
       >
-        {totals.items} items · {totals.documents} documents · {totals.pages} pages ·{" "}
-        {totals.chunks} chunks
+        {totals.items} items · {totals.figures} figures · {totals.pages} pages ·{" "}
+        {totals.documents} documents
       </Mono>
 
       <h2 className="font-display" style={{ fontSize: "var(--fs-label)", margin: "0 0 var(--s-3)" }}>
