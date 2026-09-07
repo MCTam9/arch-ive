@@ -16,6 +16,7 @@ from typing import Any
 
 import pymupdf
 
+from extractors.support import is_placeholder_value, page_is_real
 from tools.pipeline import Citation, DocumentContext, Extraction, Item, Node, register
 
 DOC_KINDS = ("deck",)
@@ -50,10 +51,6 @@ def _page_text_by_index(ctx: DocumentContext) -> dict[int, dict]:
     return {p["page_index"]: p for p in ctx.pages}
 
 
-def _is_real(page_row: dict | None) -> bool:
-    return bool(page_row) and page_row.get("content_status", "real") == "real"
-
-
 class DeckExtractor:
     doc_kinds: tuple[str, ...] = DOC_KINDS
 
@@ -64,7 +61,7 @@ class DeckExtractor:
 
         real_pages = {
             i + 1 for i in range(doc.page_count)
-            if _is_real(pages_by_index.get(i + 1, {"content_status": "real"}))
+            if page_is_real(pages_by_index.get(i + 1, {"content_status": "real"}))
         }
 
         self._emit_slide_nodes(ex, doc, pages_by_index, real_pages)
@@ -332,32 +329,34 @@ class DeckExtractor:
             ]
             labelled_values = {value for _label, value in good_pairs}
             for label, value in good_pairs:
+                value_text = f"{value} MWh"
                 ex.items.append(Item(
                     item_type="benchmark",
                     title=f"{label.strip()} -- {heading}",
                     payload={
                         "metric_id": "solar_radiation_annual",
                         "value_numeric": float(value.replace(",", "")),
-                        "value_text": f"{value} MWh",
+                        "value_text": value_text,
                         "unit_id": "mwh",
                         "comparator": "none",
-                        "is_placeholder": False,
+                        "is_placeholder": is_placeholder_value(value_text),
                         "caveat_text": None,
                     },
                     citations=[Citation(page_index=n)],
                 ))
             unlabelled = [v for v in all_values if v not in labelled_values]
             if unlabelled:
+                value_text = ", ".join(f"{v} MWh" for v in unlabelled)
                 ex.items.append(Item(
                     item_type="benchmark",
                     title=f"{heading} (unlabelled options)",
                     payload={
                         "metric_id": "solar_radiation_annual",
                         "value_numeric": None,
-                        "value_text": ", ".join(f"{v} MWh" for v in unlabelled),
+                        "value_text": value_text,
                         "unit_id": "mwh",
                         "comparator": "none",
-                        "is_placeholder": False,
+                        "is_placeholder": is_placeholder_value(value_text),
                         "caveat_text": "option labels are graphic-only on this slide; values could not be "
                                        "matched to a named massing option from the text layer",
                     },
@@ -376,32 +375,34 @@ class DeckExtractor:
             if "Daylight factor" not in text:
                 continue
             for floor, df, area in row_re.findall(text):
+                value_text = f"{df}%"
                 ex.items.append(Item(
                     item_type="benchmark",
                     title=f"Daylight factor -- floor {floor}",
                     payload={
                         "metric_id": "daylight_factor",
                         "value_numeric": float(df),
-                        "value_text": f"{df}%",
+                        "value_text": value_text,
                         "unit_id": "pct",
                         "comparator": "none",
-                        "is_placeholder": False,
+                        "is_placeholder": is_placeholder_value(value_text),
                         "caveat_text": f"area above 2% DF: {area}% of floor plate; 80% glazing assumption",
                     },
                     citations=[Citation(page_index=n)],
                 ))
             m = total_re.search(text)
             if m:
+                value_text = f"{m.group(1)} %"
                 ex.items.append(Item(
                     item_type="benchmark",
                     title="Daylight factor -- total average",
                     payload={
                         "metric_id": "daylight_factor",
                         "value_numeric": float(m.group(1)),
-                        "value_text": f"{m.group(1)} %",
+                        "value_text": value_text,
                         "unit_id": "pct",
                         "comparator": "none",
-                        "is_placeholder": False,
+                        "is_placeholder": is_placeholder_value(value_text),
                         "caveat_text": "80% glazing assumption",
                     },
                     citations=[Citation(page_index=n)],
@@ -415,16 +416,17 @@ class DeckExtractor:
                 continue
             text = doc[i].get_text()
             for value in lux_re.findall(text):
+                value_text = f"{value} lux"
                 ex.items.append(Item(
                     item_type="benchmark",
                     title=f"Illuminance threshold -- slide {n}",
                     payload={
                         "metric_id": "illuminance",
                         "value_numeric": None,
-                        "value_text": f"{value} lux",
+                        "value_text": value_text,
                         "unit_id": "lux",
                         "comparator": "none",
-                        "is_placeholder": False,
+                        "is_placeholder": is_placeholder_value(value_text),
                         "caveat_text": None,
                     },
                     citations=[Citation(page_index=n)],
@@ -442,6 +444,7 @@ class DeckExtractor:
             for value in temp_re.findall(text):
                 is_range = "-" in value
                 lo, hi = (value.split("-") if is_range else (value, value))
+                value_text = f"{value}°C"
                 ex.items.append(Item(
                     item_type="benchmark",
                     title=f"Surface temperature reduction -- slide {n}",
@@ -450,10 +453,10 @@ class DeckExtractor:
                         "value_numeric": None if is_range else float(value),
                         "value_min": float(lo) if is_range else None,
                         "value_max": float(hi) if is_range else None,
-                        "value_text": f"{value}°C",
+                        "value_text": value_text,
                         "unit_id": "celsius",
                         "comparator": "none",
-                        "is_placeholder": False,
+                        "is_placeholder": is_placeholder_value(value_text),
                         "caveat_text": None,
                     },
                     citations=[Citation(page_index=n)],

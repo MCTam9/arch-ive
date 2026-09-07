@@ -37,6 +37,7 @@ from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+from extractors.support import slugify_or_none
 from tools.pipeline import DocumentContext, Extraction, Item, Node, register
 
 # Labels whose formula is a genuine calculator output even though a sibling
@@ -282,7 +283,7 @@ class SpreadsheetCalculatorExtractor:
                         default_value = self._default_value(target_cell, ws_v)
                     ordinal += 1
                     parameters.append({
-                        "name": _slugify(label) or f"{ws.title.lower().replace(' ', '_')}_{target_cell.coordinate.lower()}",
+                        "name": slugify_or_none(label) or f"{ws.title.lower().replace(' ', '_')}_{target_cell.coordinate.lower()}",
                         "label": label,
                         "sheet_name": ws.title,
                         "cell_ref": cell_ref,
@@ -424,13 +425,6 @@ class SpreadsheetCalculatorExtractor:
                 "a running bank balance."
             )
         return None
-
-
-def _slugify(text: str | None) -> str | None:
-    if not text:
-        return None
-    s = re.sub(r"[^a-z0-9]+", "_", text.strip().lower()).strip("_")
-    return s or None
 
 
 SPREADSHEET_CALCULATOR = SpreadsheetCalculatorExtractor()

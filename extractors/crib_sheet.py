@@ -32,6 +32,7 @@ from dataclasses import dataclass
 
 import pymupdf
 
+from extractors.support import NUM, is_placeholder_value, parse_value, slugify
 from tools.pipeline import Citation, DocumentContext, Extraction, Item, Node, Reference, register
 
 RATING_SCALE_SLUG = "crib-levels"
@@ -41,30 +42,6 @@ QUALIFIER_WORDS = {"CTO", "CONTRIBUTIVE", "HIGH", "PERFORMANCE", "EXEMPLAR"}
 
 MODULE_REF_RE = re.compile(r"\(Module\s+\d+[^)]*\)", re.I)
 MODULE_PAGE_RE = re.compile(r"Module\s+\d+\s*P\d+(?:\s*-\s*P?\d+)?", re.I)
-
-NUM = r"-?\d+(?:\.\d+)?"
-
-# free-text unit -> (unit_id, symbol). Anything unseen gets a slugified ad-hoc id.
-UNIT_ALIASES = {
-    "l/p/day": ("lpd", "l/p/day"),
-    "ppm": ("ppm", "ppm"),
-    "ppb": ("ppb", "ppb"),
-    "%": ("pct", "%"),
-    "kgco2e/kg": ("kgco2e_kg", "kgCO2e/kg"),
-    "µg/m3": ("ug_m3", "µg/m³"),
-    "mg/m3": ("mg_m3", "mg/m³"),
-    "db": ("db", "dB"),
-    "dba": ("db", "dBA"),
-    "sec": ("s", "sec"),
-    "years": ("yr", "years"),
-    "kwh/m2.year": ("kwh_m2_yr", "kWh/m2.year"),
-    "kgco2e/m2gia": ("kgco2e_m2_gia", "kgCO2e/m2GIA"),
-}
-
-
-def _slugify(text: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "_", text.strip().lower()).strip("_")
-    return s or "x"
 
 
 def _dedupe_repeat(text: str) -> str:
@@ -86,22 +63,6 @@ def _fill_hex(fill: tuple[float, float, float] | None) -> str | None:
         return None
     r, g, b = (max(0, min(255, round(c * 255))) for c in fill)
     return f"#{r:02x}{g:02x}{b:02x}"
-
-
-def _norm_unit(raw: str) -> str | None:
-    key = raw.strip().lower().replace(" ", "")
-    return key or None
-
-
-def _unit_lookup(raw: str) -> tuple[str, str] | None:
-    key = _norm_unit(raw)
-    if not key:
-        return None
-    if key in UNIT_ALIASES:
-        return UNIT_ALIASES[key]
-    if re.fullmatch(r"[a-z0-9/.%µ°²·-]+", key):
-        return (_slugify(key), raw.strip())
-    return None
 
 
 @dataclass
@@ -319,35 +280,14 @@ def _cell_statements(page: pymupdf.Page, bands: list[Band], leaves: list[dict],
 
 
 def _parse_requirement(text: str) -> tuple[float | None, str | None, str, bool]:
-    """Best-effort numeric parse of a requirement cell. Always returns
-    (target_value, unit_id, comparator, parsed_ok); caller keeps target_text
-    verbatim regardless of whether this parses anything."""
-    t = text.strip()
-
-    m = re.search(rf"({NUM})\s*-\s*({NUM})\s*([%a-zA-Zµ°/²·]*)", t)
-    if m and t[max(0, m.start() - 1)] not in "A-Za-z0-9":
-        return None, None, "range", False
-
-    m = re.search(rf"[<≤]\s*({NUM})\s*([%a-zA-Zµ°/²·]*)", t)
-    if m:
-        unit = _unit_lookup(m.group(2)) if m.group(2) else None
-        return float(m.group(1)), (unit[0] if unit else None), "lte", True
-
-    m = re.search(rf"[>≥]\s*({NUM})\s*([%a-zA-Zµ°/²·]*)", t)
-    if m:
-        unit = _unit_lookup(m.group(2)) if m.group(2) else None
-        return float(m.group(1)), (unit[0] if unit else None), "gte", True
-
-    m = re.search(rf"({NUM})\s*%", t)
-    if m:
-        return float(m.group(1)), "pct", "none", True
-
-    m = re.fullmatch(rf"({NUM})\s*([a-zA-Zµ°/²·]+)", t)
-    if m:
-        unit = _unit_lookup(m.group(2))
-        return float(m.group(1)), (unit[0] if unit else None), "none", True
-
-    return None, None, "none", False
+    """Adapter onto support.parse_value for the matrix cells, whose values land
+    in `requirement` -- a table with one scalar `target_value` and no min/max.
+    A range therefore stays unparsed *here* even though the parser now recovers
+    both of its bounds; writing parsed_ok=True beside a NULL target_value would
+    claim a number the row cannot hold."""
+    parsed = parse_value(text)
+    return (parsed.numeric, parsed.unit_id, parsed.comparator,
+            parsed.parsed_ok and parsed.numeric is not None)
 
 
 class CribSheetExtractor:
@@ -493,17 +433,14 @@ class CribSheetExtractor:
                                     sorted(row_labels, key=lambda w: (w[1], w[0]))))).strip()
             if not label:
                 continue
-            use_id = _slugify(label)
+            use_id = slugify(label)
             for cx0, cx1 in col_x:
                 match = [w for w in row_vals if cx0 - 3 <= w[0] <= cx1 + 3]
                 if not match:
                     continue
                 value_text = match[0][4]
                 year = col_year[col_x.index((cx0, cx1))]
-                try:
-                    value_numeric = float(value_text)
-                except ValueError:
-                    value_numeric = None
+                parsed = parse_value(value_text)
                 ext.items.append(Item(
                     item_type="benchmark",
                     title=f"{label} {year} target",
@@ -512,11 +449,12 @@ class CribSheetExtractor:
                     confidence=0.85,
                     citations=[Citation(page_index=1)],
                     payload={
-                        "metric_id": metric_id, "value_numeric": value_numeric,
-                        "value_min": None, "value_max": None,
+                        "metric_id": metric_id, "value_numeric": parsed.numeric,
+                        "value_min": parsed.minimum, "value_max": parsed.maximum,
                         "value_text": value_text, "unit_id": unit_id,
-                        "comparator": "none", "is_placeholder": False,
-                        "caveat_text": None, "building_use_id": use_id,
+                        "comparator": parsed.comparator,
+                        "is_placeholder": is_placeholder_value(value_text),
+                        "caveat_text": parsed.caveat_text, "building_use_id": use_id,
                         "target_year": year, "region_id": None,
                         "standard_id": None, "baseline_relative_pct": None,
                     },
@@ -540,15 +478,10 @@ class CribSheetExtractor:
                 continue
             if not goal_re.match(text):
                 continue
-            is_placeholder = bool(re.match(r"^X\s*(%|km|no)", text, re.I))
-            caveat = None
-            body = text
-            if body.endswith("*"):
-                caveat = "footnoted with an asterisk on the source page; footnote text not " \
-                         "positionally linked by this extractor"
-                body = body[:-1].strip()
-            num_m = re.search(NUM, body)
-            value_numeric = float(num_m.group(0)) if (num_m and not is_placeholder) else None
+            is_placeholder = is_placeholder_value(text)
+            parsed = parse_value(text)
+            # a placeholder's digits are never its value ('X% of 2020 baseline')
+            value_numeric = None if is_placeholder else parsed.numeric
             metric_id = f"page_goal_{ctx.slug.replace('-', '_')}"
             if not any(m["id"] == metric_id for m in ext.metrics):
                 ext.metrics.append({"id": metric_id, "name": f"{ctx.slug} page-1 goal",
@@ -565,9 +498,12 @@ class CribSheetExtractor:
                 citations=[Citation(page_index=1)],
                 payload={
                     "metric_id": metric_id, "value_numeric": value_numeric,
-                    "value_min": None, "value_max": None, "value_text": text,
-                    "unit_id": None, "comparator": "none",
-                    "is_placeholder": is_placeholder, "caveat_text": caveat,
+                    "value_min": None if is_placeholder else parsed.minimum,
+                    "value_max": None if is_placeholder else parsed.maximum,
+                    "value_text": text,
+                    "unit_id": None, "comparator": parsed.comparator,
+                    "is_placeholder": is_placeholder,
+                    "caveat_text": parsed.caveat_text,
                     "building_use_id": None, "target_year": None,
                     "region_id": None, "standard_id": None,
                     "baseline_relative_pct": None,

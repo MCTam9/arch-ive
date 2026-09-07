@@ -17,6 +17,7 @@ a new shape is how one silently starts claiming another's documents.
 | `extractors/spreadsheet.py` | `calculator` | sheets, cells and formulas → `template_parameter` |
 | `extractors/deck.py` | `deck` | slide decks, heavily image-only |
 | `extractors/generic.py` | `unknown`, `guideline_report`, `deck`, `standard` | fallback: pages, chunks, full-text. Still searchable, never silently discarded |
+| `extractors/support.py` | — | shared helpers, not an extractor: `parse_value`, `slugify`, `clean`, `is_placeholder_value`, `page_is_real`. Registers nothing and must stay import-safe |
 
 `scripts/check_wat.py` fails if a module in `extractors/` is missing from this
 table, so the registry cannot quietly go stale.

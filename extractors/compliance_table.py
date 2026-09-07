@@ -54,6 +54,7 @@ import re
 
 import pymupdf
 
+from extractors.support import clean, parse_value, slugify
 from tools.pipeline import Citation, DocumentContext, Extraction, Item, Node, register
 
 FRAMEWORK_SLUG = "masterplan-sustainability"
@@ -79,48 +80,6 @@ NOT_A_TITLE_RE = re.compile(r"^[\d.\s]+$")
 # string (e.g. a review-comment log referencing 'NF1.2') never carries this.
 APPENDIX_HEADER_RE = re.compile(
     r"SUSTAINABILITY COMPLIANCE REQUIREMENTS|STRATEGY\s*REFERENCE\s*CODE", re.IGNORECASE)
-
-NUM = r"-?\d+(?:\.\d+)?"
-
-
-def _clean(text: str | None) -> str:
-    if not text:
-        return ""
-    return re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
-
-
-def _unit_from_requirement(text: str) -> tuple[str, str] | None:
-    m = re.search(r"\((%|m|km|m2|m²|dB|dBA)\)", text)
-    if not m:
-        return None
-    raw = m.group(1)
-    mapping = {"%": ("pct", "%"), "m": ("m", "m"), "km": ("km", "km"),
-               "m2": ("m2", "m2"), "m²": ("m2", "m2"), "dB": ("db", "dB"),
-               "dBA": ("db", "dBA")}
-    return mapping.get(raw)
-
-
-def _comparator_from_requirement(text: str) -> str:
-    low = text.lower()
-    if low.startswith("minimum") or " minimum " in low:
-        return "gte"
-    if low.startswith("maximum") or " maximum " in low:
-        return "lte"
-    return "none"
-
-
-def _parse_target(target_text: str) -> tuple[float | None, bool]:
-    """A single bare number parses; anything compound ('800 (primary...) 400
-    (secondary...)') is kept verbatim only -- see module docstring."""
-    t = target_text.strip()
-    if re.fullmatch(NUM, t):
-        return float(t), True
-    return None, False
-
-
-def _slugify(text: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "_", text.strip().lower()).strip("_")
-    return s or "x"
 
 
 def _scan_scope_titles(doc: pymupdf.Document) -> dict[int, str | None]:
@@ -250,9 +209,9 @@ class ComplianceTableExtractor:
                     rows = t.extract()
                 except Exception:
                     continue
-                code_rows = sum(1 for r in rows if r and r[0] and CODE_RE.match(_clean(r[0])))
+                code_rows = sum(1 for r in rows if r and r[0] and CODE_RE.match(clean(r[0])))
                 has_header = any(
-                    APPENDIX_HEADER_RE.search(_clean(c))
+                    APPENDIX_HEADER_RE.search(clean(c))
                     for r in rows for c in (r or []) if c
                 )
                 if code_rows >= 3 or (code_rows >= 1 and has_header):
@@ -279,19 +238,19 @@ class ComplianceTableExtractor:
             for row in rows:
                 if not row:
                     continue
-                col0 = _clean(row[0]) if row[0] else ""
+                col0 = clean(row[0]) if row[0] else ""
                 # find the first non-empty text cell after col0 -- header
                 # rows (principle/section banners) and code rows both use it,
                 # just merged into different physical columns depending on
                 # which half of the appendix produced them.
-                rest = [c for c in row[1:] if c and _clean(c)]
-                label = _clean(rest[0]) if rest else ""
+                rest = [c for c in row[1:] if c and clean(c)]
+                label = clean(rest[0]) if rest else ""
 
                 if not col0 and label:
                     pm = PRINCIPLE_RE.match(label)
                     if pm:
                         current_principle_code = pm.group(2)
-                        principles[pm.group(2)] = _clean(pm.group(1))
+                        principles[pm.group(2)] = clean(pm.group(1))
                         self._ensure_criterion(ext, criteria_refs, code=pm.group(2),
                                                  parent_code=None, title=principles[pm.group(2)])
                         continue
@@ -299,7 +258,7 @@ class ComplianceTableExtractor:
                     if sm and (current_principle_code is None
                                or sm.group(1).startswith(current_principle_code)):
                         theme = re.match(r"[A-Z]{2,3}", sm.group(1)).group()
-                        sections[sm.group(1)] = _clean(sm.group(2))
+                        sections[sm.group(1)] = clean(sm.group(2))
                         self._ensure_criterion(ext, criteria_refs, code=theme,
                                                  parent_code=None, title=principles.get(theme, theme))
                         self._ensure_criterion(ext, criteria_refs, code=sm.group(1),
@@ -318,7 +277,7 @@ class ComplianceTableExtractor:
                 # token (short, no sentence punctuation).
                 target_text = None
                 for c in rest[1:]:
-                    ct = _clean(c)
+                    ct = clean(c)
                     if ct and len(ct) < 80:
                         target_text = ct
                         break
@@ -368,10 +327,14 @@ class ComplianceTableExtractor:
                     continue
                 requirement_seen[col0] = target_text
 
-                target_value, parsed_ok = _parse_target(target_text)
+                # the value cell is a bare number; the unit ('... (%)') and the
+                # comparator ('Minimum ...') are stated in the prose beside it,
+                # so the requirement sentence goes in as parse context.
+                parsed = parse_value(target_text, context=requirement_text)
+                target_value, parsed_ok = parsed.numeric, parsed.parsed_ok
                 is_deliverable = target_text.strip().upper() == "Y"
-                unit = _unit_from_requirement(requirement_text)
-                comparator = _comparator_from_requirement(requirement_text) if parsed_ok else "none"
+                unit = (parsed.unit_id, parsed.unit_symbol) if parsed.unit_id else None
+                comparator = parsed.comparator
                 deliverable_name = requirement_text.split(" developed ")[0].strip() \
                     if is_deliverable else None
 
@@ -410,7 +373,7 @@ class ComplianceTableExtractor:
         reference the id directly."""
         if title in scope_registry:
             return scope_registry[title]
-        slug = _slugify(title)
+        slug = slugify(title)
         scope_id = f"{FRAMEWORK_SLUG}-{slug}"
         scope_registry[title] = scope_id
         ext.requirement_scopes.append({
@@ -480,7 +443,7 @@ class ComplianceTableExtractor:
                 if not candidates:
                     continue
                 value_bbox, value_text = min(candidates, key=lambda c: c[0][1] - hy1)
-                value_text = _clean(value_text)
+                value_text = clean(value_text)
                 if not value_text or not code:
                     continue
                 section_code = re.match(r"[A-Z]{2,3}\d", code).group()
@@ -490,7 +453,9 @@ class ComplianceTableExtractor:
                                          title=section_code)
                 self._ensure_criterion(ext, criteria_refs, code=code, parent_code=section_code,
                                          title=code)
-                target_value, parsed_ok = _parse_target(value_text) if kind == "target" else (None, False)
+                parsed = parse_value(value_text) if kind == "target" else None
+                target_value = parsed.numeric if parsed else None
+                parsed_ok = bool(parsed and parsed.parsed_ok)
                 ext.items.append(Item(
                     item_type="requirement",
                     statement=value_text,
@@ -503,8 +468,10 @@ class ComplianceTableExtractor:
                         "requirement_kind": "graded" if kind == "kpi" else "compliance",
                         "criterion_id": f"crit-{code}", "rating_level_id": None,
                         "metric_id": None, "target_value": target_value,
-                        "target_text": value_text, "unit_id": None,
-                        "comparator": "none", "is_deliverable": False,
+                        "target_text": value_text,
+                        "unit_id": parsed.unit_id if parsed else None,
+                        "comparator": parsed.comparator if parsed else "none",
+                        "is_deliverable": False,
                         "deliverable_name": None, "parsed_ok": parsed_ok,
                     },
                 ))

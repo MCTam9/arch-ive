@@ -45,6 +45,7 @@ import re
 
 import pymupdf
 
+from extractors.support import clean
 from tools.pipeline import Citation, DocumentContext, Extraction, Item, Node, Reference, register
 
 DOC_KINDS = ("solutions_framework",)
@@ -120,32 +121,20 @@ _RUBRIC_AXES: tuple[tuple[str, str, str], ...] = (
 )
 
 
-def _clean(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _printed_citation(printed_page: int) -> Citation | None:
+def _pdf_index_for_printed_page(printed_page: int) -> int | None:
+    """0-based PDF index of the spread that carries a printed page number the
+    TOC names. This direction has to be arithmetic -- nothing else maps a
+    printed number back onto a PDF page. The opposite direction does not:
+    tools/write_extraction.py fills `citation.printed_page_label` from
+    `source_page`, which ingest read off the page's own footer.
+    """
     if printed_page < 1 or printed_page > _BODY_MAX_PRINTED_PAGE:
         return None
-    k = (printed_page - 1) // 2
-    pdf_index0 = k + _BODY_FIRST_PDF_INDEX
-    return Citation(page_index=pdf_index0 + 1, printed_page_label=str(printed_page))
-
-
-def _printed_label_for_pdf_index(pdf_index0: int) -> str | None:
-    """'L / R' printed-page label for a body-spread page, matching the format
-    source_page.printed_page_label uses on spread layouts (db/schema.sql)."""
-    k = pdf_index0 - _BODY_FIRST_PDF_INDEX
-    if k < 0:
-        return None
-    left = 2 * k + 1
-    if left > _BODY_MAX_PRINTED_PAGE:
-        return None
-    return f"{left} / {left + 1}"
+    return (printed_page - 1) // 2 + _BODY_FIRST_PDF_INDEX
 
 
 def _citation(pdf_index0: int) -> Citation:
-    return Citation(page_index=pdf_index0 + 1, printed_page_label=_printed_label_for_pdf_index(pdf_index0))
+    return Citation(page_index=pdf_index0 + 1)
 
 
 class SmartCityExtractor:
@@ -239,12 +228,13 @@ class SmartCityExtractor:
             page_to = max(page_from, next_page - 1)
             parent_code = code.rsplit(".", 1)[0] if "." in code else None
             ref = f"{ctx.slug}-sec-{code}"
-            cit = _printed_citation(page_from)
+            first_pdf = _pdf_index_for_printed_page(page_from)
+            last_pdf = _pdf_index_for_printed_page(page_to)
             ex.nodes.append(Node(
                 node_kind="chapter" if level == 1 else "section",
                 title=title, code=code, ordinal=i,
-                page_from=cit.page_index if cit else None,
-                page_to=_printed_citation(page_to).page_index if _printed_citation(page_to) else None,
+                page_from=first_pdf + 1 if first_pdf is not None else None,
+                page_to=last_pdf + 1 if last_pdf is not None else None,
                 parent_ref=node_ref_by_code.get(parent_code, root_ref),
                 ref=ref,
             ))
@@ -270,7 +260,7 @@ class SmartCityExtractor:
         for page_index, page in enumerate(doc):
             text = page.get_text()
             for m in _LADDER_RE.finditer(text):
-                principle = _clean(m.group(1)).strip("'‘’")
+                principle = clean(m.group(1)).strip("'‘’")
                 cit = _citation(page_index)
                 seen.setdefault(principle, []).append(cit)
 
@@ -346,12 +336,12 @@ class SmartCityExtractor:
             ex.design_variables.append({"id": var_id, "name": name, "ordinal": n_axes})
             ex.design_variable_values.append({
                 "id": f"{var_id}.score_{lo_score}", "variable_id": var_id,
-                "label": f"{_clean(lo_label)} = {lo_score} (weighting {weight})",
+                "label": f"{clean(lo_label)} = {lo_score} (weighting {weight})",
                 "ordinal": int(lo_score),
             })
             ex.design_variable_values.append({
                 "id": f"{var_id}.score_{hi_score}", "variable_id": var_id,
-                "label": f"{_clean(hi_label)} = {hi_score} (weighting {weight})",
+                "label": f"{clean(hi_label)} = {hi_score} (weighting {weight})",
                 "ordinal": int(hi_score),
             })
             n_axes += 1
@@ -437,7 +427,7 @@ class SmartCityExtractor:
         tech_rows = row_groups(by_col["tech"])
 
         def text_of(group: list) -> str:
-            return _clean(" ".join(w[4] for w in sorted(group, key=lambda w: (round(w[1]), w[0]))))
+            return clean(" ".join(w[4] for w in sorted(group, key=lambda w: (round(w[1]), w[0]))))
 
         def nearest(groups: list[list], y: float) -> str:
             if not groups:

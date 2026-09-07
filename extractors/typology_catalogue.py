@@ -22,6 +22,7 @@ from typing import Any
 
 import pymupdf
 
+from extractors.support import is_placeholder_value, page_is_real
 from tools.pipeline import Citation, DocumentContext, Extraction, Item, Node, register
 
 DOC_KINDS = ("guideline_report",)
@@ -172,8 +173,7 @@ class TypologyCatalogueExtractor:
             return ""
 
         def is_real(idx: int) -> bool:
-            row = page_map.get(idx)
-            return bool(row) and row.get("content_status", "real") == "real"
+            return page_is_real(page_map.get(idx))
 
         def real_range(lo: int, hi: int) -> list[int]:
             return [i for i in range(lo, hi + 1) if is_real(i)]
@@ -567,7 +567,7 @@ class TypologyCatalogueExtractor:
     def _benchmarks(self, ex: Extraction, page_map: dict, text_of) -> None:
         seen: set[tuple[str, str]] = set()
         for idx, row in sorted(page_map.items()):
-            if row.get("content_status", "real") != "real":
+            if not page_is_real(row):
                 continue
             # de-hyphenate line-wrapped words ("consid-\nered" -> "considered")
             # so a benchmark sentence split across two lines still matches
@@ -604,7 +604,7 @@ class TypologyCatalogueExtractor:
                             "value_text": value_text,
                             "unit_id": unit_id,
                             "comparator": "range" if value_min is not None else "none",
-                            "is_placeholder": False,
+                            "is_placeholder": is_placeholder_value(value_text),
                             "caveat_text": None,
                         },
                         citations=[Citation(page_index=idx)],

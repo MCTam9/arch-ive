@@ -29,7 +29,7 @@ import pymupdf
 import pytest
 
 from tools.pipeline import DocumentContext
-from extractors.smart_city import SMART_CITY, _printed_label_for_pdf_index, _RUBRIC_AXES
+from extractors.smart_city import SMART_CITY, _pdf_index_for_printed_page, _RUBRIC_AXES
 
 SLUG = "g-sc-fixture"
 
@@ -149,13 +149,17 @@ def test_doc_kinds_and_purity():
     assert "db" not in dir(SMART_CITY)
 
 
-def test_printed_label_formula():
+def test_printed_page_maps_onto_its_spread():
     # printed page 1 is the left half of the first body page (pdf index 2,
     # 0-based) -- verified against the real document's own footer numbers
-    # for every one of its 117 body pages (see the module docstring).
-    assert _printed_label_for_pdf_index(2) == "1 / 2"
-    assert _printed_label_for_pdf_index(3) == "3 / 4"
-    assert _printed_label_for_pdf_index(1) is None  # before the body
+    # for every one of its 117 body pages (see the module docstring). Only
+    # this direction is arithmetic now; the printed *label* on a citation is
+    # filled by tools/write_extraction.py from source_page.
+    assert _pdf_index_for_printed_page(1) == 2
+    assert _pdf_index_for_printed_page(2) == 2
+    assert _pdf_index_for_printed_page(3) == 3
+    assert _pdf_index_for_printed_page(0) is None
+    assert _pdf_index_for_printed_page(999) is None  # past the numbered body
 
 
 def test_extractor_end_to_end():
@@ -185,7 +189,9 @@ def test_extractor_end_to_end():
     assert alpha.payload["requirement_kind"] == "graded"
     # alpha appears on both fixture pages 2 and 3 (0-based) -- both citations kept.
     assert {c.page_index for c in alpha.citations} == {3, 4}
-    assert all(c.printed_page_label for c in alpha.citations)
+    # the extractor leaves printed_page_label to the writer, which reads the
+    # label ingest took off the page footer rather than recomputing it
+    assert all(c.printed_page_label is None for c in alpha.citations)
     beta = ladder_items["Contribution ladder: beta-test sustainability principle"]
     assert len(beta.citations) == 1
 

@@ -652,6 +652,45 @@ def _topo_order_items(items: list[Item]) -> list[Item]:
     return order
 
 
+def _citation_pages(conn: psycopg.Connection, document_id: str) -> dict[int, dict]:
+    """Per page: the id a citation points at, plus what the *caller* can fill in
+    that an extractor cannot.
+
+    Extractors are pure (CONTRACT.md), so they see none of this: they emit
+    `Citation(page_index=n)` and the writer enriches it here.
+
+    - `printed_page_label` is what the page prints about itself ('187 / 188' on
+      a spread). tools/ingest_document.py read it off the page footer; an
+      extractor reconstructing it from pagination arithmetic is guessing at a
+      value already on disk.
+    - `bbox` is only honest for a page whose text layer is empty and that
+      carries exactly one figure: then an item cited to that page can have come
+      from nothing else. Anywhere else the figure a text item refers to is not
+      knowable from the citation, and a plausible box is worse than a null one
+      -- so the column stays NULL. See the note in tools/crop_figures.py on
+      source_asset.bbox being in the same coordinate space.
+    """
+    pages = {
+        r["page_index"]: {"id": r["id"], "printed_page_label": r["printed_page_label"],
+                          "is_image_only": r["is_image_only"], "bbox": None}
+        for r in conn.execute(
+            "SELECT id, page_index, printed_page_label, is_image_only "
+            "FROM source_page WHERE document_id = %s", (document_id,)
+        ).fetchall()
+    }
+    figures: dict[str, list] = {}
+    for r in conn.execute(
+        "SELECT a.page_id, a.bbox FROM source_asset a JOIN source_page p ON p.id = a.page_id "
+        "WHERE p.document_id = %s AND a.bbox IS NOT NULL", (document_id,)
+    ).fetchall():
+        figures.setdefault(r["page_id"], []).append(r["bbox"])
+    for page in pages.values():
+        boxes = figures.get(page["id"], ())
+        if page["is_image_only"] and len(boxes) == 1:
+            page["bbox"] = boxes[0]
+    return pages
+
+
 def _write_items(
     conn: psycopg.Connection,
     document_id: str,
@@ -664,12 +703,7 @@ def _write_items(
     lookup_ref_maps = lookup_ref_maps or {}
     item_ref_map: dict[str, str] = {}
     refs_present = {it.ref for it in items if it.ref}
-    page_index_map = {
-        r["page_index"]: r["id"]
-        for r in conn.execute(
-            "SELECT id, page_index FROM source_page WHERE document_id = %s", (document_id,)
-        ).fetchall()
-    }
+    page_by_index = _citation_pages(conn, document_id)
 
     counts = {
         "items": 0, "citations": 0, "chunks_item": 0,
@@ -751,12 +785,14 @@ def _write_items(
                 _write_template_parameters(conn, item_id, parameters)
 
         for cit in item.citations:
-            page_id = page_index_map.get(cit.page_index)
+            page = page_by_index.get(cit.page_index)
             conn.execute(
                 """INSERT INTO citation
                      (knowledge_item_id, document_id, page_id, page_index, printed_page_label, bbox)
                    VALUES (%s,%s,%s,%s,%s,%s)""",
-                (item_id, document_id, page_id, cit.page_index, cit.printed_page_label, cit.bbox),
+                (item_id, document_id, page["id"] if page else None, cit.page_index,
+                 cit.printed_page_label or (page["printed_page_label"] if page else None),
+                 cit.bbox or (page["bbox"] if page else None)),
             )
             counts["citations"] += 1
             covered_pages.add(cit.page_index)
