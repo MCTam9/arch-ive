@@ -1,6 +1,14 @@
 import Link from "next/link";
 import { requireSession } from "@/lib/session";
-import { listReviewQueue, recordReview, REVIEW_STATUSES, type ReviewFilter } from "@/lib/queries";
+import { listReviewQueue, recordReview, REVIEW_STATUSES } from "@/lib/queries";
+import { backParams, href } from "@/lib/links";
+import {
+  REVIEW_PAGE_SIZE,
+  first,
+  parseOffset,
+  parseReviewStatus,
+  type RawSearchParams,
+} from "@/lib/params";
 import { DraftWrapper } from "@/components/draft-wrapper";
 import { PageScan } from "@/components/page-scan";
 import { Button, DataLabel, PageHeader, EmptyState } from "@/components/ui";
@@ -12,34 +20,37 @@ export const dynamic = "force-dynamic";
 export default async function ReviewPage({
   searchParams,
 }: {
-  searchParams: Promise<{ document?: string; offset?: string; status?: string }>;
+  searchParams: Promise<RawSearchParams>;
 }) {
   const session = await requireSession();
   const sp = await searchParams;
-  const offset = Number(sp.offset ?? 0) || 0;
-  const status: ReviewFilter = REVIEW_STATUSES.includes(sp.status as ReviewFilter)
-    ? (sp.status as ReviewFilter)
-    : "pending";
+  // Parsed by lib/params.ts, not here. The offset clamp is the reason: this
+  // page had none and listReviewQueue has none either, so /review?offset=-5
+  // reached Postgres as OFFSET -5 and 500'd. The status allowlist is the
+  // other: it is what makes listReviewQueue's interpolation of the status
+  // into SQL safe, and an invariant that load-bearing gets one copy.
+  const offset = parseOffset(sp.offset);
+  const status = parseReviewStatus(sp.status);
+  const documentSlug = first(sp, "document");
   const canReview = session.role === "owner" || session.role === "editor";
   const { items, total } = await listReviewQueue(session.accountId, {
-    document: sp.document,
+    document: documentSlug,
     status,
+    // Passed rather than defaulted: the two pagination links below step by
+    // exactly this, and they used to type 25 against a separate default.
+    limit: REVIEW_PAGE_SIZE,
     offset,
   });
 
   // Every link keeps the filter and the document, or paging out of a filtered
-  // view silently drops you back into 'pending'.
-  const href = (over: Record<string, string | number | undefined>) => {
-    const q = new URLSearchParams();
-    if (sp.document) q.set("document", sp.document);
-    if (status !== "pending") q.set("status", status);
-    for (const [k, v] of Object.entries(over)) {
-      if (v === undefined) q.delete(k);
-      else q.set(k, String(v));
-    }
-    const qs = q.toString();
-    return `/review${qs ? `?${qs}` : ""}`;
-  };
+  // view silently drops you back into 'pending'. `undefined` in `over` clears
+  // a key -- the spread carries it over the current value and href() drops it.
+  const reviewHref = (over: Record<string, string | number | undefined> = {}) =>
+    href("/review", {
+      document: documentSlug,
+      status: status === "pending" ? undefined : status,
+      ...over,
+    });
 
   async function decide(formData: FormData) {
     "use server";
@@ -66,11 +77,17 @@ export default async function ReviewPage({
           hook `.tab[aria-current='page']` hangs the selected styling off, so
           the state is expressed once instead of as an inline ternary a hover
           rule could never override. */}
+      {/* Switching tab returns to page 1: the offsets do not correspond
+          between two differently-sized queues. The 'pending' tab clears the
+          key rather than spelling out the default, so the queue's home URL is
+          `/review` and not `/review?status=pending`. This used to be a second,
+          inline URLSearchParams builder that dropped the offset only by
+          never carrying it. */}
       <nav aria-label="Review status" style={{ display: "flex", gap: "var(--s-2)", marginBottom: "var(--s-5)" }}>
         {REVIEW_STATUSES.map((s) => (
           <Link
             key={s}
-            href={s === "pending" ? href({ status: undefined, offset: undefined }) : `/review?${new URLSearchParams({ ...(sp.document ? { document: sp.document } : {}), status: s })}`}
+            href={reviewHref({ status: s === "pending" ? undefined : s, offset: undefined })}
             aria-current={s === status ? "page" : undefined}
             className="tab font-display"
           >
@@ -152,7 +169,7 @@ export default async function ReviewPage({
                       status tab at this offset rather than to page 1 of
                       pending. */}
                   <Link
-                    href={`/item/${it.id}?from=review&ret=${encodeURIComponent(href({ offset: offset || undefined }))}`}
+                    href={href(`/item/${it.id}`, backParams("review", reviewHref({ offset: offset || undefined })))}
                     className="font-mono link"
                     style={{ alignSelf: "center", fontSize: "var(--fs-sm)" }}
                   >
@@ -182,10 +199,10 @@ export default async function ReviewPage({
           carried the accent — the same control, two appearances. */}
       <nav aria-label="Pages" style={{ display: "flex", gap: "var(--s-4)", marginTop: "var(--s-6)" }}>
         {offset > 0 && (
-          <Link className="font-mono link" href={href({ offset: Math.max(0, offset - 25) })}>&larr; previous</Link>
+          <Link className="font-mono link" href={reviewHref({ offset: Math.max(0, offset - REVIEW_PAGE_SIZE) })}>&larr; previous</Link>
         )}
         {offset + items.length < total && (
-          <Link className="font-mono link" href={href({ offset: offset + 25 })}>next &rarr;</Link>
+          <Link className="font-mono link" href={reviewHref({ offset: offset + REVIEW_PAGE_SIZE })}>next &rarr;</Link>
         )}
       </nav>
     </div>

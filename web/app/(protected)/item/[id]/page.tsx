@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/session";
 import { getKnowledgeItem } from "@/lib/queries";
 import { backLink, browseHref } from "@/lib/links";
+import { first, type RawSearchParams } from "@/lib/params";
 import { Mono, CiteRef } from "@/components/mono";
 import { DraftWrapper } from "@/components/draft-wrapper";
 import { LevelBadge } from "@/components/level-badge";
@@ -18,7 +19,7 @@ export default async function ItemPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ from?: string; ret?: string }>;
+  searchParams: Promise<RawSearchParams>;
 }) {
   const session = await requireSession();
   const { id } = await params;
@@ -28,7 +29,10 @@ export default async function ItemPage({
 
   // An item is reachable from browse, the matrix and the review queue. The
   // back link used to say "browse" and go to unfiltered browse from all three.
-  const back = backLink(sp.from, sp.ret);
+  // Through first(): ?ret=a&ret=b would otherwise hand backLink an array,
+  // which fails safePath's startsWith and degrades the back link for no
+  // stated reason.
+  const back = backLink(first(sp, "from"), first(sp, "ret"));
 
   return (
     <div style={{ maxWidth: "80ch", margin: "0 auto", padding: "var(--s-6)" }}>

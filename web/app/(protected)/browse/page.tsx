@@ -3,14 +3,19 @@ import { requireSession } from "@/lib/session";
 import {
   getFacetOptions,
   listKnowledgeItems,
-  BROWSE_PAGE_SIZE,
   ITEM_TYPES,
-  type BrowseFilters,
   type BrowseItem,
   type ResultKind,
   type FacetOptions,
 } from "@/lib/queries";
-import { BROWSE_PATH, browseHref, browseParams } from "@/lib/links";
+import { BROWSE_PATH, backParams, browseHref, browseParams, href } from "@/lib/links";
+import {
+  BROWSE_PAGE_SIZE,
+  parseBrowseFilters,
+  parseOffset,
+  singleValued,
+  type RawSearchParams,
+} from "@/lib/params";
 import { Mono, CiteRef } from "@/components/mono";
 import { Button, DataLabel, EmptyState } from "@/components/ui";
 import { StatusFlag } from "@/components/draft-wrapper";
@@ -18,40 +23,25 @@ import { GeneratedFlag } from "@/components/generated-mark";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = {
-  document?: string;
-  item_type?: string;
-  topic?: string;
-  scale?: string;
-  level?: string;
-  q?: string;
-  offset?: string;
-};
-
 export default async function BrowsePage({
   searchParams,
 }: {
-  searchParams: Promise<SearchParams>;
+  searchParams: Promise<RawSearchParams>;
 }) {
   const session = await requireSession();
-  const sp = await searchParams;
-  const offset = Math.max(Number(sp.offset ?? 0) || 0, 0);
-
-  const filters: BrowseFilters = {
-    documentSlug: sp.document || undefined,
-    itemType: sp.item_type || undefined,
-    topicId: sp.topic || undefined,
-    scaleId: sp.scale || undefined,
-    levelId: sp.level || undefined,
-    q: sp.q || undefined,
-  };
+  const raw = await searchParams;
+  // One collapse of repeated keys, once, at the edge. Everything below reads
+  // `sp` and can assume a single value; lib/params.ts says why that matters.
+  const sp = singleValued(raw);
+  const offset = parseOffset(raw.offset);
+  const filters = parseBrowseFilters(raw);
 
   const [facets, { items, total, suppressed, kindCounts }] = await Promise.all([
     getFacetOptions(session.accountId),
     listKnowledgeItems(session.accountId, filters, { offset }),
   ]);
 
-  const current = browseParams(sp as Record<string, string | undefined>);
+  const current = browseParams(sp);
   const ranked = Boolean(filters.q);
 
   // Every generated link keeps the rest of the filters. Changing a facet
@@ -292,10 +282,9 @@ const HEADLINE: Record<ResultKind, string> = {
  *  on the page they came from, and a figure additionally names itself so that
  *  view can point at it. */
 function resultHref(item: BrowseItem, ret: string): string {
-  const back = `from=browse&ret=${encodeURIComponent(ret)}`;
-  if (item.kind === "item" || !item.page_id) return `/item/${item.id}?${back}`;
-  const asset = item.asset_id ? `&asset=${item.asset_id}` : "";
-  return `/page/${item.page_id}?${back}${asset}`;
+  const back = backParams("browse", ret);
+  if (item.kind === "item" || !item.page_id) return href(`/item/${item.id}`, back);
+  return href(`/page/${item.page_id}`, { ...back, asset: item.asset_id ?? undefined });
 }
 
 function toOptions(terms: FacetOptions["topics"]) {

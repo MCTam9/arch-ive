@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   BROWSE_PATH,
   backLink,
+  backParams,
   browseHref,
   browseParams,
   href,
@@ -107,6 +108,48 @@ describe("backLink", () => {
       label: "browse",
       href: BROWSE_PATH,
     });
+  });
+});
+
+describe("backParams", () => {
+  it("round-trips through backLink", () => {
+    // The encode and decode sides of the same pair, asserted together: three
+    // call sites used to spell `?from=…&ret=${encodeURIComponent(…)}` by hand
+    // while only backLink knew how to read it.
+    const ret = "/review?status=approved&offset=25";
+    const url = new URL(href("/item/abc", backParams("review", ret)), "https://arch-ive.example");
+    expect(url.pathname).toBe("/item/abc");
+    // Encoded on the way out — the inner "&" must not read as a second
+    // parameter of the outer URL.
+    expect(url.search).toBe("?from=review&ret=%2Freview%3Fstatus%3Dapproved%26offset%3D25");
+
+    const sp = url.searchParams;
+    expect(backLink(sp.get("from") ?? undefined, sp.get("ret") ?? undefined)).toEqual({
+      label: "review queue",
+      href: ret,
+    });
+  });
+
+  it("keeps the section when there is no ret to return to", () => {
+    expect(backParams("matrix", undefined)).toEqual({ from: "matrix" });
+    expect(backParams("browse", null)).toEqual({ from: "browse" });
+    expect(backParams("browse", "")).toEqual({ from: "browse" });
+  });
+
+  it("refuses a hostile ret rather than putting it in a link", () => {
+    // safePath guards the decode side too, so this is belt and braces — but an
+    // off-site value that never reaches the URL cannot survive a copy-paste
+    // into some other reader of `ret`.
+    expect(backParams("review", "//evil.example")).toEqual({ from: "review" });
+    expect(backParams("review", "/\\evil.example")).toEqual({ from: "review" });
+    expect(backParams("review", "https://evil.example/browse")).toEqual({ from: "review" });
+    expect(href("/item/abc", backParams("review", "//evil.example"))).toBe(
+      "/item/abc?from=review",
+    );
+  });
+
+  it("degrades to the section page when a hostile ret is decoded anyway", () => {
+    expect(backLink("matrix", "//evil.example")).toEqual({ label: "matrix", href: "/matrix" });
   });
 });
 

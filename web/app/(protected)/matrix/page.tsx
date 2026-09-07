@@ -1,6 +1,7 @@
 import { requireSession } from "@/lib/session";
 import { listFrameworks, getMatrixDocuments, getMatrix } from "@/lib/queries";
-import { href, BROWSE_PATH } from "@/lib/links";
+import { href, backParams, BROWSE_PATH } from "@/lib/links";
+import { first, type RawSearchParams } from "@/lib/params";
 import Link from "next/link";
 import { Mono } from "@/components/mono";
 import { Button, PageHeader, EmptyState } from "@/components/ui";
@@ -11,14 +12,21 @@ export const dynamic = "force-dynamic";
 export default async function MatrixPage({
   searchParams,
 }: {
-  searchParams: Promise<{ framework?: string; document?: string }>;
+  searchParams: Promise<RawSearchParams>;
 }) {
   const session = await requireSession();
   const sp = await searchParams;
 
+  // Repeated keys collapse to the first, as everywhere else: ?document=a&document=b
+  // used to arrive as an array, never match a sheet, and fall back silently.
+  const requestedFramework = first(sp, "framework");
+  const requestedDocument = first(sp, "document");
+
   const frameworks = await listFrameworks(session.accountId);
   const frameworkSlug =
-    sp.framework || frameworks.find((f) => f.slug === "practice-crib-sheets")?.slug || frameworks[0]?.slug;
+    requestedFramework ||
+    frameworks.find((f) => f.slug === "practice-crib-sheets")?.slug ||
+    frameworks[0]?.slug;
 
   if (!frameworkSlug) {
     return (
@@ -36,8 +44,8 @@ export default async function MatrixPage({
   // framework used to submit the previous framework's sheet, which is truthy,
   // so the fallback was skipped and the page reported "No criteria found" for
   // a combination that cannot exist.
-  const documentSlug = documents.some((d) => d.slug === sp.document)
-    ? sp.document
+  const documentSlug = documents.some((d) => d.slug === requestedDocument)
+    ? requestedDocument
     : documents[0]?.slug;
 
   const { levels, criteria, cells } = await getMatrix(session.accountId, frameworkSlug, documentSlug);
@@ -189,7 +197,7 @@ export default async function MatrixPage({
                                     indistinguishable from the label beside it
                                     apart from an underline. */}
                                 <Link
-                                  href={`/item/${cell.knowledge_item_id}?from=matrix&ret=${encodeURIComponent(matrixHref)}`}
+                                  href={href(`/item/${cell.knowledge_item_id}`, backParams("matrix", matrixHref))}
                                   className="link font-body"
                                   style={{ fontSize: "var(--fs-sm)" }}
                                 >

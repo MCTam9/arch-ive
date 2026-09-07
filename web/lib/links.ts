@@ -12,6 +12,12 @@ export type QueryValue = string | number | undefined | null;
  *  Empty values are dropped rather than serialised, so a URL never accumulates
  *  `?document=&item_type=&topic=` from an unset `<select>` — those read as
  *  broken when shared, and every consumer has to `|| undefined` them anyway.
+ *
+ *  That rule is also how a filter gets *cleared*. The review queue used to
+ *  keep its own builder for this, seeding a URLSearchParams from the current
+ *  state and then `q.delete(k)` for an `undefined` override. Spreading the
+ *  override over the current state gets there without a second builder: the
+ *  key survives the spread carrying `undefined`, and is dropped here.
  */
 export function href(path: string, params: Record<string, QueryValue> = {}): string {
   const q = new URLSearchParams();
@@ -78,6 +84,36 @@ export function safePath(candidate: string | undefined | null): string | null {
   const second = candidate[1];
   if (second === "/" || second === "\\") return null;
   return candidate;
+}
+
+/** The sections an item is reachable from. */
+export const BACK_FROM = ["browse", "matrix", "review"] as const;
+export type BackFrom = (typeof BACK_FROM)[number];
+
+/** The `from`/`ret` pair, for a link into an item or a page.
+ *
+ *  The encode side of `backLink`, and it sits here so the two are read
+ *  together. It used to be written out by hand at three call sites — browse's
+ *  `resultHref`, review's "open" link and a matrix cell — each spelling
+ *  `?from=…&ret=${encodeURIComponent(…)}` itself, which is both the parameter
+ *  names and the escaping restated three times.
+ *
+ *  Spread into `href` rather than returning a string: the caller can add its
+ *  own parameters (browse's `asset`) without concatenating query strings, and
+ *  `href` does the encoding, so nothing here has to.
+ *
+ *  `ret` goes through `safePath` on the way out as well as on the way back.
+ *  Every ret we build is one of our own URLs, so this should never fire — but
+ *  an off-site value is then unable to reach the page at all, rather than
+ *  sitting in a link waiting for the decode side to be the only thing between
+ *  it and a redirect.
+ */
+export function backParams(
+  from: BackFrom,
+  ret: string | undefined | null,
+): { from: BackFrom; ret?: string } {
+  const target = safePath(ret);
+  return target ? { from, ret: target } : { from };
 }
 
 /** Where "back" goes from an item, and what to call it.
