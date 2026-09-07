@@ -1,7 +1,14 @@
-"""Hybrid retrieval over `chunk`: full-text always, vector cosine when any
-chunk has an embedding, fused by reciprocal rank fusion. Every result carries
-its citation (document slug + page) because an answer with no page to point
-at is not useful in this corpus.
+"""Hybrid retrieval over `v_retrievable_chunk`: full-text always, vector cosine
+when any chunk has an embedding, fused by reciprocal rank fusion. Every result
+carries its citation (document slug + page) because an answer with no page to
+point at is not useful in this corpus.
+
+What is retrievable at all -- rejected items excluded, the page-text floor,
+what counts as placeholder -- is not decided here. It is stated once in
+db/schema.sql and read by this module, tools/mcp_server.py and
+web/lib/queries.ts alike. Ranking is not shared and deliberately so: the vector
+leg needs pgvector and a local embedding model, neither of which can run in a
+Vercel function, so the web keeps its own lexical fallback.
 """
 from __future__ import annotations
 
@@ -28,71 +35,57 @@ def _embed_query(text: str) -> str | None:
     return "[" + ",".join(f"{x:.8f}" for x in vec.tolist()) + "]"
 
 
-# A page chunk is a whole page of raw text and one of them is three characters
-# long, so page-derived rows carry a length floor. Item and figure chunks are
-# composed text and are exempt: 180 item chunks are shorter than this and are
-# perfectly good answers, so a blanket floor would quietly delete them from
-# search.
-PAGE_TEXT_FLOOR = (
-    "AND (c.knowledge_item_id IS NOT NULL OR c.asset_id IS NOT NULL "
-    "OR length(c.text) >= 40)"
-)
+def _facet_clauses(facets: dict[str, str] | None,
+                    item_col: str = "c.knowledge_item_id") -> tuple[str, list]:
+    """One `item_has_term(...)` per facet value, ANDed -- a result must carry
+    every requested term. `facets` maps an arbitrary label to a taxonomy_term id.
 
+    The subtree rule this used to spell out by hand (a term matches its whole
+    ltree subtree, EXISTS rather than a JOIN so a chunk is never multiplied)
+    now lives in db/schema.sql, where web/lib/queries.ts reads the same one.
+    `item_has_term` is non-strict on purpose: a page or figure chunk has no
+    knowledge_item and gets false rather than NULL.
 
-def _facet_clauses(facets: dict[str, str] | None) -> tuple[str, list]:
-    """One EXISTS per facet value, ANDed -- a result must carry every requested
-    term. `facets` maps an arbitrary label to a taxonomy_term id.
-
-    A term matches its whole subtree. This was `term_id = %s`, which is exact,
-    so asking for a top-level topic returned only the items tagged on the
-    parent itself and silently dropped everything filed under its children --
-    'Health & Wellbeing' gave 17 of its 53. The taxonomy is an ltree with a
-    GiST index on `path` (db/schema.sql), so `<@` is both correct and cheap.
-    Flat taxonomies are unaffected: their subtree is the term.
-
-    EXISTS rather than the JOIN this used to be, and that is not cosmetic. A
-    join on an exact term id matches at most one row per item, but a join on a
-    subtree matches one row per descendant term -- which would multiply chunks
-    in the result and quietly corrupt the RRF ranking below."""
+    `item_col` names the uuid column to test, so a caller querying a different
+    surface -- v_retrievable_item, or the raw knowledge_item table in
+    tests/test_facet_subtree.py -- can point the same clause at its own."""
     if not facets:
         return "", []
     clauses = []
     params: list = []
     for term_id in facets.values():
-        clauses.append(
-            "AND EXISTS (SELECT 1 FROM item_term it"
-            "  JOIN taxonomy_term tt ON tt.id = it.term_id"
-            " WHERE it.knowledge_item_id = ki.id"
-            "   AND tt.path <@ (SELECT path FROM taxonomy_term WHERE id = %s))"
-        )
+        clauses.append(f"AND item_has_term({item_col}, %s)")
         params.append(term_id)
     return " ".join(clauses), params
 
 
-def search(conn, query: str, *, facets: dict[str, str] | None = None, limit: int = 20) -> list[dict]:
-    """Hybrid full-text + vector search over knowledge-item chunks.
+def search(conn, query: str, *, facets: dict[str, str] | None = None, limit: int = 20,
+            include_placeholder: bool = False, require_citation: bool = True) -> list[dict]:
+    """Hybrid full-text + vector search over v_retrievable_chunk.
 
-    Excludes content_status != 'real' by default (draft/wip/lorem/template
-    content should never masquerade as a real answer). Every row carries
-    document_slug + page_index (its citation) alongside the chunk text.
+    The view carries the policy: rejected items and sub-floor page text are
+    already gone from it, and `is_placeholder` / `has_citation` are columns
+    rather than clauses restated here. The two flags are keyword-only and
+    default to the safe answer -- real content, with a page to point at.
+
+    `include_placeholder=True` returns lorem/template/wip/draft content (and
+    anything sitting on a page marked as such), every row labelled
+    `is_placeholder` with the offending status in `placeholder_status`.
     """
     facet_sql, facet_params = _facet_clauses(facets)
-    floor = PAGE_TEXT_FLOOR
+    policy = ""
+    if not include_placeholder:
+        policy += " AND NOT c.is_placeholder"
+    if require_citation:
+        policy += " AND c.has_citation"
 
     fts_rows = db.all_rows(
         conn,
-        f"""SELECT c.id AS chunk_id,
+        f"""SELECT c.chunk_id,
                    row_number() OVER (ORDER BY ts_rank(c.tsv, websearch_to_tsquery('english', %s)) DESC) AS rnk
-            FROM chunk c
-            LEFT JOIN knowledge_item ki ON ki.id = c.knowledge_item_id
+            FROM v_retrievable_chunk c
             WHERE c.tsv @@ websearch_to_tsquery('english', %s)
-              AND c.content_status = 'real'
-              -- LEFT, so a page-derived or figure chunk is reachable at all.
-              -- The item predicates have to tolerate the null they now see,
-              -- or the outer join is undone by its own WHERE clause.
-              AND (ki.id IS NULL
-                   OR (ki.content_status = 'real' AND ki.review_status <> 'rejected'))
-              {floor}
+              {policy}
               {facet_sql}
             ORDER BY rnk
             LIMIT 200""",
@@ -104,15 +97,11 @@ def search(conn, query: str, *, facets: dict[str, str] | None = None, limit: int
     if embedding is not None and db.scalar(conn, "SELECT 1 FROM chunk WHERE embedding IS NOT NULL LIMIT 1"):
         vec_rows = db.all_rows(
             conn,
-            f"""SELECT c.id AS chunk_id,
+            f"""SELECT c.chunk_id,
                        row_number() OVER (ORDER BY c.embedding <=> %s::vector) AS rnk
-                FROM chunk c
-                LEFT JOIN knowledge_item ki ON ki.id = c.knowledge_item_id
+                FROM v_retrievable_chunk c
                 WHERE c.embedding IS NOT NULL
-                  AND c.content_status = 'real'
-                  AND (ki.id IS NULL
-                       OR (ki.content_status = 'real' AND ki.review_status <> 'rejected'))
-                  {floor}
+                  {policy}
                   {facet_sql}
                 ORDER BY rnk
                 LIMIT 200""",
@@ -129,15 +118,16 @@ def search(conn, query: str, *, facets: dict[str, str] | None = None, limit: int
         return []
 
     ranked_ids = sorted(fused, key=fused.get, reverse=True)[:limit]
+    # Hydrate through the same view the ranking legs read, so a row the policy
+    # excludes cannot re-enter here by way of a stale id.
     rows = db.all_rows(
         conn,
-        """SELECT c.id AS chunk_id, c.text, c.knowledge_item_id, c.page_from, c.page_to,
-                  ki.item_type, ki.title, ki.statement,
-                  d.slug AS document_slug, d.title AS document_title
-           FROM chunk c
-           LEFT JOIN knowledge_item ki ON ki.id = c.knowledge_item_id
-           JOIN source_document d ON d.id = c.document_id
-           WHERE c.id = ANY(%s)""",
+        """SELECT c.chunk_id, c.text, c.knowledge_item_id, c.page_from, c.page_to,
+                  c.item_type, c.title, c.statement, c.content_status,
+                  c.is_placeholder, c.placeholder_status,
+                  c.document_slug, c.document_title
+           FROM v_retrievable_chunk c
+           WHERE c.chunk_id = ANY(%s)""",
         (ranked_ids,),
     )
     by_id = {r["chunk_id"]: r for r in rows}
@@ -155,6 +145,9 @@ def search(conn, query: str, *, facets: dict[str, str] | None = None, limit: int
             "title": row["title"],
             "statement": row["statement"],
             "text": row["text"],
+            "content_status": row["content_status"],
+            "is_placeholder": row["is_placeholder"],
+            "placeholder_status": row["placeholder_status"],
             "citation": {
                 "document_slug": row["document_slug"],
                 "document_title": row["document_title"],
@@ -167,8 +160,13 @@ def search(conn, query: str, *, facets: dict[str, str] | None = None, limit: int
 
 def get_benchmark(conn, metric_id: str, building_use: str | None = None, year: int | None = None) -> list[dict]:
     """Benchmarks for a metric, via v_benchmark, optionally narrowed by
-    building use and target year."""
-    sql = "SELECT * FROM v_benchmark WHERE metric_id = %s"
+    building use and target year.
+
+    `has_citation` is not optional. CONTRACT.md: a row carrying neither a
+    document slug nor a page is dropped, not returned with a null citation.
+    tools/mcp_server.get_benchmark enforced that and this one did not, which is
+    the shape of divergence the view exists to end."""
+    sql = "SELECT * FROM v_benchmark WHERE has_citation AND metric_id = %s"
     params: list = [metric_id]
     if building_use is not None:
         sql += " AND building_use_id = %s"
@@ -201,6 +199,10 @@ def _main() -> int:
     sp.add_argument("--limit", type=int, default=20)
     sp.add_argument("--facet", action="append", default=[], metavar="TERM_ID",
                      help="taxonomy_term id to require; repeatable")
+    sp.add_argument("--include-placeholder", action="store_true",
+                     help="also return lorem/template/wip/draft content, labelled")
+    sp.add_argument("--allow-uncited", action="store_true",
+                     help="keep rows with no page to point at (dropped by default)")
 
     bp = sub.add_parser("benchmark", help="get_benchmark")
     bp.add_argument("metric_id")
@@ -216,7 +218,9 @@ def _main() -> int:
     with db.connect() as conn:
         if args.cmd == "search":
             facets = {t: t for t in args.facet} or None
-            out = search(conn, args.query, facets=facets, limit=args.limit)
+            out = search(conn, args.query, facets=facets, limit=args.limit,
+                          include_placeholder=args.include_placeholder,
+                          require_citation=not args.allow_uncited)
         elif args.cmd == "benchmark":
             out = get_benchmark(conn, args.metric_id, args.building_use, args.year)
         else:

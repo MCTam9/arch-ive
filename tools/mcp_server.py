@@ -17,6 +17,16 @@ Two rules shape every tool here:
      `include_placeholder` flag for the rare case it's wanted deliberately,
      and every row so returned is labelled `is_placeholder: true`.
 
+     A chunk inherits that status from its page, so a figure description on a
+     page marked 'wip' is placeholder content even though the description row
+     itself says 'real'. 141 such chunks were served as fact by both this
+     server and the web before db/schema.sql took the rule over.
+
+Neither rule is written out here any more. Both live in db/schema.sql --
+`is_placeholder_status()`, `v_retrievable_chunk`, `v_retrievable_item`, and an
+`is_placeholder_content` column on the four reporting views -- because
+web/lib/queries.ts has to obey the same rules and cannot import Python.
+
 Connection handling deliberately does NOT go through tools/db.py: that
 module connects as arch_app (read-write) using DATABASE_URL. This server
 connects as arch_read using DATABASE_URL_READONLY, setting app.account_id
@@ -37,13 +47,19 @@ from psycopg.rows import dict_row
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools import db  # noqa: E402  (all_rows/one/scalar are plain executors, not connection factories)
-from tools.search import PAGE_TEXT_FLOOR, _facet_clauses, search as _hybrid_search  # noqa: E402
+from tools.search import search as _hybrid_search  # noqa: E402
 
 READONLY_DEFAULT_DSN = "postgresql://arch_read:dev@localhost:55432/postgres"
 DEFAULT_ACCOUNT = "00000000-0000-0000-0000-0000000000aa"
 
-# content_status values that must never be served as fact by default.
-PLACEHOLDER_STATUSES = ("lorem", "template", "wip", "draft")
+# The set of content_status values that must never be served as fact by
+# default used to be a tuple here, pasted into a NOT IN clause by hand. It is
+# now is_placeholder_status() in db/schema.sql, and every view that matters
+# exposes the answer as a column: `is_placeholder` on v_retrievable_chunk,
+# `is_placeholder_content` on v_benchmark / v_requirement_matrix /
+# v_requirement_scope_matrix / v_template_catalogue. web/lib/queries.ts reads
+# the same ones, which is the point -- the Python copy and the TypeScript copy
+# had already drifted apart once.
 
 TEXT_TRUNCATE_LIMIT = 600
 
@@ -100,14 +116,6 @@ def _truncate_strings(obj: Any, limit: int = TEXT_TRUNCATE_LIMIT) -> tuple[Any, 
     return obj, False
 
 
-def _content_status_exclude_clause(column: str, params: list) -> str:
-    """Parameterised NOT IN over the fixed placeholder-status allowlist.
-    The excluded values are a Python constant, never user input."""
-    placeholders = ", ".join(["%s"] * len(PLACEHOLDER_STATUSES))
-    params.extend(PLACEHOLDER_STATUSES)
-    return f"{column} NOT IN ({placeholders})"
-
-
 def _existing_columns(conn: psycopg.Connection, view_name: str) -> set[str]:
     rows = db.all_rows(
         conn,
@@ -126,75 +134,40 @@ def _existing_columns(conn: psycopg.Connection, view_name: str) -> set[str]:
 
 def search_knowledge(conn, query: str, *, facets: dict[str, str] | None = None,
                       limit: int = 20, include_placeholder: bool = False) -> dict:
-    """Full-text/vector hybrid search over chunk.tsv, via tools.search.search.
-    `facets` maps an arbitrary label to a taxonomy_term id, ANDed together --
-    same contract as tools/search.py's CLI."""
+    """Full-text/vector hybrid search over v_retrievable_chunk, via
+    tools.search.search. `facets` maps an arbitrary label to a taxonomy_term
+    id, ANDed together -- same contract as tools/search.py's CLI.
+
+    One query for both paths. `include_placeholder` used to fork into a
+    second, hand-written copy of the search here, on the argument that
+    tools.search.search's real-only default must have no flag that could
+    weaken it by accident. The copy is what went wrong instead: it had already
+    drifted -- it dropped the `content_status = 'real'` check on the chunk
+    itself and gated on page_from/page_to where the default path gated on
+    nothing -- so the escape hatch was quietly a different search, not a wider
+    one. A keyword-only argument over a view that states the rule is the safer
+    shape: there is one query, the default is still the safe one, and the rule
+    it relaxes is written in db/schema.sql where the web reads it too.
+
+    Both the rejected-item exclusion and the citation rule are now
+    unconditional here, on both paths."""
     limit = _clamp(limit, default=20, maximum=50)
 
-    if not include_placeholder:
-        results = _hybrid_search(conn, query, facets=facets, limit=limit)
-        results = [r for r in results if r["citation"].get("page_from") is not None
-                   or r["citation"].get("page_to") is not None]
-        for r in results:
-            r["is_placeholder"] = False
-        payload, truncated = _truncate_strings(results)
-        return {"query": query, "results": payload, "truncated": truncated,
-                "placeholder_included": False}
+    results = _hybrid_search(conn, query, facets=facets, limit=limit,
+                              include_placeholder=include_placeholder,
+                              require_citation=True)
+    for r in results:
+        # The MCP row key predates the view column and stays as it is: this
+        # is a published tool response shape, not an internal name.
+        r["is_placeholder"] = bool(r.get("is_placeholder"))
 
-    # Explicit opt-in escape hatch: full-text only (no vector fusion), the
-    # content_status filter relaxed, every row labelled. This is deliberately
-    # a separate, simpler code path rather than a flag threaded through
-    # tools.search.search -- that function's default (real-only) behaviour
-    # must stay the safe default with no way to weaken it by accident.
-    facet_sql, facet_params = _facet_clauses(facets)
-    floor = PAGE_TEXT_FLOOR
-    rows = db.all_rows(
-        conn,
-        f"""SELECT c.id AS chunk_id, c.text, c.knowledge_item_id, c.page_from, c.page_to,
-                   c.content_status AS chunk_content_status,
-                   ki.item_type, ki.title, ki.statement,
-                   ki.content_status AS item_content_status,
-                   d.slug AS document_slug, d.title AS document_title
-            FROM chunk c
-            LEFT JOIN knowledge_item ki ON ki.id = c.knowledge_item_id
-            JOIN source_document d ON d.id = c.document_id
-            WHERE c.tsv @@ websearch_to_tsquery('english', %s)
-              -- LEFT, so page-derived and figure chunks are reachable. The
-              -- item predicate has to tolerate the null it now sees, or the
-              -- outer join is undone by its own WHERE clause.
-              AND (ki.id IS NULL OR ki.review_status <> 'rejected')
-              AND (c.page_from IS NOT NULL OR c.page_to IS NOT NULL)
-              {floor}
-              {facet_sql}
-            ORDER BY ts_rank(c.tsv, websearch_to_tsquery('english', %s)) DESC
-            LIMIT %s""",
-        (query, *facet_params, query, limit),
-    )
-    results = []
-    for r in rows:
-        is_placeholder = (r["chunk_content_status"] in PLACEHOLDER_STATUSES
-                           or r["item_content_status"] in PLACEHOLDER_STATUSES)
-        results.append({
-            "chunk_id": str(r["chunk_id"]),
-            "knowledge_item_id": str(r["knowledge_item_id"]) if r["knowledge_item_id"] else None,
-            "item_type": r["item_type"],
-            "title": r["title"],
-            "statement": r["statement"],
-            "text": r["text"],
-            "is_placeholder": is_placeholder,
-            "content_status": r["item_content_status"],
-            "citation": {
-                "document_slug": r["document_slug"],
-                "document_title": r["document_title"],
-                "page_from": r["page_from"],
-                "page_to": r["page_to"],
-            },
-        })
     payload, truncated = _truncate_strings(results)
-    return {"query": query, "results": payload, "truncated": truncated,
-            "placeholder_included": True,
-            "warning": "placeholder/draft/wip/template content included on request; "
-                       "check is_placeholder on each row before treating it as fact"}
+    out = {"query": query, "results": payload, "truncated": truncated,
+           "placeholder_included": include_placeholder}
+    if include_placeholder:
+        out["warning"] = ("placeholder/draft/wip/template content included on request; "
+                          "check is_placeholder on each row before treating it as fact")
+    return out
 
 
 def get_benchmark(conn, *, metric: str | None = None, building_use: str | None = None,
@@ -203,7 +176,7 @@ def get_benchmark(conn, *, metric: str | None = None, building_use: str | None =
     """Benchmarks from v_benchmark, optionally narrowed by metric, building
     use and target year."""
     limit = _clamp(limit, default=50, maximum=200)
-    clauses: list[str] = ["page_index IS NOT NULL"]  # no citation, no result
+    clauses: list[str] = ["has_citation"]  # no citation, no result
     params: list[Any] = []
     if metric is not None:
         clauses.append("metric_id = %s")
@@ -215,15 +188,17 @@ def get_benchmark(conn, *, metric: str | None = None, building_use: str | None =
         clauses.append("target_year = %s")
         params.append(target_year)
     if not include_placeholder:
-        clauses.append(_content_status_exclude_clause("content_status", params))
+        clauses.append("NOT is_placeholder_content")
 
+    # is_placeholder_content, not is_placeholder: v_benchmark already carries
+    # benchmark.is_placeholder, which says the *value* was printed as 'X%' in
+    # the source. Two different claims, two different columns.
     sql = ("SELECT * FROM v_benchmark WHERE " + " AND ".join(clauses) +
            " ORDER BY target_year NULLS LAST, value_numeric NULLS LAST LIMIT %s")
     params.append(limit)
     rows = db.all_rows(conn, sql, params)
     for r in rows:
         r["knowledge_item_id"] = str(r["knowledge_item_id"])
-        r["is_placeholder_content"] = r["content_status"] in PLACEHOLDER_STATUSES
     payload, truncated = _truncate_strings(rows)
     return {"results": payload, "truncated": truncated, "placeholder_included": include_placeholder}
 
@@ -237,7 +212,7 @@ _REQUIREMENT_MATRIX_COLUMNS = [
     "knowledge_item_id", "framework_slug", "criterion_code", "criterion", "criterion_path",
     "level_ordinal", "level_code", "level_name", "statement", "target_text", "target_value",
     "unit", "comparator", "is_deliverable", "deliverable_name", "content_status",
-    "review_status", "document_slug", "page_index",
+    "review_status", "document_slug", "page_index", "is_placeholder_content",
 ]
 
 
@@ -283,18 +258,25 @@ def get_requirement_matrix(conn, *, topic: str | None = None, level: str | None 
 
     if topic is not None:
         if "knowledge_item_id" in available:
+            # `topic` here is a fuzzy human handle (id, code or label
+            # substring), resolved to term ids first; item_has_term then does
+            # the subtree matching, so a parent topic pulls its children in.
             clauses.append(
-                "knowledge_item_id IN (SELECT it.knowledge_item_id FROM item_term it "
-                "JOIN taxonomy_term tt ON tt.id = it.term_id "
-                "WHERE tt.taxonomy_id = 'topic' AND (tt.id = %s OR tt.code = %s OR tt.label ILIKE %s))"
+                "EXISTS (SELECT 1 FROM taxonomy_term tt "
+                "WHERE tt.taxonomy_id = 'topic' "
+                "AND (tt.id = %s OR tt.code = %s OR tt.label ILIKE %s) "
+                "AND item_has_term(knowledge_item_id, tt.id))"
             )
             params.extend([topic, topic, f"%{topic}%"])
         else:
             missing.append("knowledge_item_id (topic filter ignored)")
 
     if not include_placeholder:
-        if "content_status" in available:
-            clauses.append(_content_status_exclude_clause("content_status", params))
+        # The view states the rule; this only decides whether to apply it.
+        if "is_placeholder_content" in available:
+            clauses.append("NOT is_placeholder_content")
+        elif "content_status" in available:
+            clauses.append("NOT is_placeholder_status(content_status)")
         else:
             missing.append("content_status (placeholder filter unavailable -- results NOT guaranteed real)")
 
@@ -307,8 +289,12 @@ def get_requirement_matrix(conn, *, topic: str | None = None, level: str | None 
     for r in rows:
         if r.get("knowledge_item_id") is not None:
             r["knowledge_item_id"] = str(r["knowledge_item_id"])
-        if "content_status" in r:
-            r["is_placeholder_content"] = r["content_status"] in PLACEHOLDER_STATUSES
+        # is_placeholder_content comes off the view when the view has it. When
+        # it does not, the row simply goes out unlabelled and the reason is
+        # already in missing_columns -- re-deriving the rule in Python here is
+        # what let the two halves of this file disagree in the first place.
+        if "is_placeholder_content" in r and r["is_placeholder_content"] is None:
+            r["is_placeholder_content"] = False
     payload, truncated = _truncate_strings(rows)
     out = {"results": payload, "truncated": truncated, "placeholder_included": include_placeholder}
     if missing:
@@ -330,13 +316,16 @@ def list_templates(conn, *, limit: int = 100, include_placeholder: bool = False)
     clauses = ["t.document_slug IS NOT NULL"]
     params: list[Any] = []
     if not include_placeholder:
-        clauses.append(_content_status_exclude_clause("ki.content_status", params))
+        clauses.append("NOT t.is_placeholder_content")
 
+    # No join back to knowledge_item: the view carries content_status and the
+    # placeholder verdict now. It carries no has_citation and never will --
+    # these are xlsx workbooks with no page, so a column that is false for
+    # every row would only invite a caller to filter the catalogue away.
     sql = f"""SELECT t.knowledge_item_id, t.slug, t.template_kind, t.engine,
                      t.title, t.document_slug, t.input_count, t.output_count,
-                     ki.content_status
+                     t.content_status, t.is_placeholder_content
               FROM v_template_catalogue t
-              JOIN knowledge_item ki ON ki.id = t.knowledge_item_id
               WHERE {' AND '.join(clauses)}
               ORDER BY t.document_slug, t.slug
               LIMIT %s"""
@@ -344,7 +333,6 @@ def list_templates(conn, *, limit: int = 100, include_placeholder: bool = False)
     rows = db.all_rows(conn, sql, params)
     for r in rows:
         r["knowledge_item_id"] = str(r["knowledge_item_id"])
-        r["is_placeholder_content"] = r["content_status"] in PLACEHOLDER_STATUSES
         sheets = db.all_rows(
             conn,
             "SELECT DISTINCT sheet_name FROM template_parameter "
@@ -360,12 +348,17 @@ def get_citation(conn, item_id: str) -> dict:
     """Every citation recorded for one knowledge_item: document slug, PDF
     page index, printed page label, bbox. Always labels placeholder content
     rather than excluding it -- the caller already has a specific item_id in
-    hand, most likely from search_knowledge, and needs to know what it is."""
+    hand, most likely from search_knowledge, and needs to know what it is.
+
+    Reads the base tables on purpose, not v_retrievable_item: a rejected item
+    still has citations, and someone holding its id is entitled to see where
+    it came from. Filtering here would make a review impossible."""
     rows = db.all_rows(
         conn,
         """SELECT c.id AS citation_id, c.page_index, c.printed_page_label, c.bbox,
                   d.slug AS document_slug, d.title AS document_title,
-                  ki.item_type, ki.title AS item_title, ki.content_status, ki.review_status
+                  ki.item_type, ki.title AS item_title, ki.content_status, ki.review_status,
+                  is_placeholder_status(ki.content_status) AS is_placeholder
            FROM citation c
            JOIN source_document d ON d.id = c.document_id
            LEFT JOIN knowledge_item ki ON ki.id = c.knowledge_item_id
@@ -377,7 +370,6 @@ def get_citation(conn, item_id: str) -> dict:
         return {"item_id": item_id, "citations": [], "error": "no citation found for this item_id"}
     for r in rows:
         r["citation_id"] = str(r["citation_id"])
-        r["is_placeholder"] = r["content_status"] in PLACEHOLDER_STATUSES
     return {"item_id": item_id, "citations": rows}
 
 
@@ -411,11 +403,14 @@ def get_document(conn, slug: str) -> dict:
 
     breakdown = db.all_rows(
         conn,
-        """SELECT content_status, count(*) AS n FROM knowledge_item
-           WHERE document_id = %s GROUP BY content_status ORDER BY n DESC""",
+        """SELECT content_status, is_placeholder_status(content_status) AS is_placeholder,
+                  count(*) AS n
+           FROM knowledge_item
+           WHERE document_id = %s
+           GROUP BY content_status ORDER BY n DESC""",
         (doc["id"],),
     )
-    placeholder_items = sum(r["n"] for r in breakdown if r["content_status"] in PLACEHOLDER_STATUSES)
+    placeholder_items = sum(r["n"] for r in breakdown if r["is_placeholder"])
     total_items = sum(r["n"] for r in breakdown)
 
     return {

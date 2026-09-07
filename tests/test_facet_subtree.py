@@ -6,8 +6,10 @@ So asking for a top-level topic returned only the items tagged on the parent
 itself: 'Health & Wellbeing' gave 17 of the 53 items filed under it, and the
 new home page's tile would have promised 53 and delivered 17.
 
-These tests pin the semantics on the Python side, which is the side with a test
-runner; `web/lib/queries.ts` carries the same clause and the same comment.
+The clause is no longer carried twice. Both sides now call `item_has_term()`
+in db/schema.sql, which is the only place `<@` is written -- so these tests
+pin the semantics for the web as much as for Python, and the direct
+`item_has_term` tests at the bottom pin them for anything that comes later.
 """
 from __future__ import annotations
 
@@ -59,7 +61,7 @@ def tree():
 
 def _matching(conn, term_id: str, document_id) -> set[str]:
     """The items `search`'s facet filter would keep, for one term."""
-    clause, params = search._facet_clauses({"topic": term_id})
+    clause, params = search._facet_clauses({"topic": term_id}, item_col="ki.id")
     rows = db.all_rows(
         conn,
         f"SELECT ki.id::text AS id FROM knowledge_item ki "
@@ -97,7 +99,7 @@ def test_the_filter_never_duplicates_an_item(tree):
             (tree["items"]["on_child"], tree["parent"]),
         )
     with db.connect() as conn:
-        clause, params = search._facet_clauses({"topic": tree["parent"]})
+        clause, params = search._facet_clauses({"topic": tree["parent"]}, item_col="ki.id")
         rows = db.all_rows(
             conn,
             f"SELECT ki.id::text AS id FROM knowledge_item ki "
@@ -112,3 +114,69 @@ def test_no_facets_adds_no_clause():
     for empty in (None, {}):
         clause, params = search._facet_clauses(empty)
         assert clause == "" and params == []
+
+
+def test_the_clause_targets_the_column_it_is_given():
+    """The same predicate string has to be valid against v_retrievable_chunk
+    (`c.knowledge_item_id`), v_retrievable_item and the raw table. That is why
+    the column is a parameter and not baked in."""
+    clause, params = search._facet_clauses({"topic": "t.x"})
+    assert clause == "AND item_has_term(c.knowledge_item_id, %s)"
+    assert params == ["t.x"]
+    clause, _ = search._facet_clauses({"topic": "t.x"}, item_col="ki.id")
+    assert clause == "AND item_has_term(ki.id, %s)"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# item_has_term itself -- the SQL the clauses above are now only a caller of.
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_item_has_term_matches_the_whole_subtree(tree):
+    with db.connect() as conn:
+        for role in ("on_parent", "on_child"):
+            got = db.scalar(conn, "SELECT item_has_term(%s::uuid, %s)",
+                            (tree["items"][role], tree["parent"]))
+            assert got is True, f"{role} should match the parent term"
+        assert db.scalar(conn, "SELECT item_has_term(%s::uuid, %s)",
+                         (tree["items"]["on_parent"], tree["child"])) is False
+
+
+def test_item_has_term_is_false_not_null_for_a_null_item():
+    """Page and figure chunks have no knowledge_item, so this is called with
+    NULL constantly. NULL would be the honest SQL answer and the wrong one:
+    the web counts what a facet hid with `WHERE NOT ok`, which never fires on
+    a NULL, so a filtered browse would report `suppressed: 0` and silently
+    drop every page and figure match."""
+    with db.connect() as conn:
+        got = db.scalar(conn, "SELECT item_has_term(NULL::uuid, 'anything')")
+    assert got is False, "item_has_term must not be STRICT"
+
+
+def test_item_has_term_is_false_for_an_unknown_term(tree):
+    with db.connect() as conn:
+        got = db.scalar(conn, "SELECT item_has_term(%s::uuid, %s)",
+                        (tree["items"]["on_parent"], "no.such.term"))
+    assert got is False
+
+
+def test_the_facet_count_view_agrees_with_the_filter(tree):
+    """v_term_item_count exists so a facet's advertised count and the filter's
+    result cannot disagree. Scoped to this fixture's own document, because
+    arch_test is shared."""
+    with db.connect() as conn:
+        counted = db.scalar(
+            conn,
+            "SELECT count(DISTINCT ki.id)::int FROM knowledge_item ki "
+            "WHERE ki.document_id = %s AND item_has_term(ki.id, %s)",
+            (tree["document_id"], tree["parent"]),
+        )
+        via_view = db.scalar(
+            conn,
+            "SELECT count(DISTINCT s.knowledge_item_id)::int "
+            "FROM v_item_term_subtree s "
+            "JOIN knowledge_item ki ON ki.id = s.knowledge_item_id "
+            "WHERE s.term_id = %s AND ki.document_id = %s "
+            "  AND ki.review_status <> 'rejected'",
+            (tree["parent"], tree["document_id"]),
+        )
+    assert counted == via_view == 2

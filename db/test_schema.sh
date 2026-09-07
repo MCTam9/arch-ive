@@ -85,9 +85,29 @@ check "views all invoker" \
 check "rls on content tables" \
   "$(psql "$DB" -t -A -c "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and not c.relrowsecurity and c.relname not in ('stage_crosswalk','rating_level_crosswalk')")" 0
 
+# The retrieval-policy functions must run as the caller. item_has_term reads
+# item_term and taxonomy_term through a view, so SECURITY DEFINER on it would
+# hand an anonymous connection the whole tagging graph and, worse, would make
+# every facet filter built on it bypass RLS silently.
+check "policy fns not definer" \
+  "$(psql "$DB" -t -A -c "select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname in ('is_placeholder_status','item_has_term') and p.prosecdef")" 0
+
 echo "access"
 check "anon base table"   "$(q 'select count(*) from benchmark;')" 0
 check "anon view"         "$(q 'select count(*) from v_benchmark;')" 0
+# The retrieval surfaces are what an agent and the web read. If one of them
+# lost security_invoker these would serve the entire corpus to a connection
+# with no account set at all -- which is the exact failure this file was
+# written for, one view further down the stack.
+check "anon retrievable chunk" "$(q 'select count(*) from v_retrievable_chunk;')" 0
+check "anon retrievable item"  "$(q 'select count(*) from v_retrievable_item;')" 0
+check "anon term subtree"      "$(q 'select count(*) from v_item_term_subtree;')" 0
+# LEFT JOIN from taxonomy_term, so an escaping row here shows up as a term with
+# a count rather than as nothing -- count the rows, not the sum.
+check "anon term counts"       "$(q 'select count(*) from v_term_item_count;')" 0
+# Non-strict on purpose: a page or figure chunk passes NULL and needs false
+# back, or the web's suppressed-count arithmetic goes NULL and reports 0.
+check "item_has_term null item" "$(q "select item_has_term(NULL,'x')::text;")" false
 check "revoked base"      "$(as $GONE 'select count(*) from benchmark;')" 0
 check "revoked view"      "$(as $GONE 'select count(*) from v_benchmark;')" 0
 check "reader base"       "$(as $READER 'select count(*) from benchmark;')" 1
@@ -105,5 +125,11 @@ echo "data"
 check "benchmark via view" \
   "$(as $READER "select value_numeric||' '||unit from v_benchmark where metric_id='upfront_embodied_carbon';")" \
   "380 kgCO2e/m2GIA"
+# The two is_placeholder columns on v_benchmark are different claims:
+# benchmark.is_placeholder says the printed value was 'X%'; is_placeholder_content
+# says the item is lorem/template/wip/draft. Neither is true of this fixture row.
+check "benchmark placeholder cols" \
+  "$(as $READER "select is_placeholder::text||'/'||is_placeholder_content::text||'/'||has_citation::text from v_benchmark;")" \
+  "false/false/true"
 
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "FAILURES"; exit 1; }

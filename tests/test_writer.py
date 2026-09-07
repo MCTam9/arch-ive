@@ -199,10 +199,21 @@ def _checks() -> list[tuple[str, bool, str]]:
         tpl_view = db.one(conn, "SELECT * FROM v_template_catalogue WHERE document_slug = %s", (SLUG,))
         check("v_template_catalogue has the row", tpl_view is not None, str(tpl_view))
 
-        search_rows = db.all_rows(conn, "SELECT item_type, content_status FROM v_search WHERE document_slug = %s", (SLUG,))
-        check("v_search sees all 9 items", len(search_rows) == 9, str(len(search_rows)))
-        check("v_search carries the draft guidance item, marked", any(
-            r["item_type"] == "guidance" and r["content_status"] == "draft" for r in search_rows), str(search_rows))
+        # v_search is gone: its array_agg(term_ids) could not express subtree
+        # matching, so it looked like a facility for the one filter that
+        # matters and was a trap. v_retrievable_item replaces it, and adds the
+        # rejected-item exclusion -- none of these 9 items is rejected, so the
+        # count is the same one.
+        search_rows = db.all_rows(
+            conn,
+            "SELECT item_type, content_status, is_placeholder FROM v_retrievable_item "
+            "WHERE document_slug = %s",
+            (SLUG,),
+        )
+        check("v_retrievable_item sees all 9 items", len(search_rows) == 9, str(len(search_rows)))
+        check("v_retrievable_item carries the draft guidance item, marked", any(
+            r["item_type"] == "guidance" and r["content_status"] == "draft"
+            and r["is_placeholder"] is True for r in search_rows), str(search_rows))
 
         try:
             from tools.search import search as hybrid_search
