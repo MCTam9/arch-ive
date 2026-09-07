@@ -32,7 +32,8 @@ import sys
 from pathlib import Path
 
 from tools import db
-from tools.env import load_env, require
+from tools.env import load_env
+from tools.pages_bucket import pages_bucket
 
 FIGURES_DIR = Path(".tmp") / "figures"
 PREFIX = "figures/"
@@ -169,21 +170,10 @@ def crop(rows: list[dict], quiet: bool = False) -> list[dict]:
 
 
 def upload(written: list[dict]) -> int:
-    """Push to the page bucket under the figures/ prefix. Reuses the R2 client
-    shape of tools/upload_page_images.py, and the same account-scoped
-    credentials from .env -- production's token is read-only by design and
-    cannot write here."""
-    import boto3
-
-    account, key_id, secret = require("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
-    bucket = require("R2_BUCKET_PAGES")[0]
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=f"https://{account}.r2.cloudflarestorage.com",
-        aws_access_key_id=key_id,
-        aws_secret_access_key=secret,
-        region_name="auto",
-    )
+    """Push to the page bucket under the figures/ prefix, on the account-scoped
+    credentials in .env -- production's token is read-only by design and cannot
+    write here. See tools/pages_bucket.py."""
+    s3, bucket = pages_bucket()
     n = 0
     for row in written:
         s3.upload_file(str(row["path"]), bucket, row["key"],
@@ -212,17 +202,7 @@ def record(conn, written: list[dict]) -> int:
 
 def verify(conn) -> int:
     """Every image_key in the database resolves to an object. Returns missing."""
-    import boto3
-
-    account, key_id, secret = require("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
-    bucket = require("R2_BUCKET_PAGES")[0]
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=f"https://{account}.r2.cloudflarestorage.com",
-        aws_access_key_id=key_id,
-        aws_secret_access_key=secret,
-        region_name="auto",
-    )
+    s3, bucket = pages_bucket()
     keys = [r["image_key"] for r in db.all_rows(
         conn, "SELECT image_key FROM source_asset WHERE image_key IS NOT NULL")]
     missing = 0

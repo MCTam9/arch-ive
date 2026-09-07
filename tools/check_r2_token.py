@@ -32,6 +32,7 @@ from pathlib import Path
 
 from tools import db
 from tools.env import load_env, require
+from tools.pages_bucket import pages_bucket
 
 
 def _load_candidate(env_file: str | None) -> tuple[str, str]:
@@ -52,23 +53,6 @@ def _load_candidate(env_file: str | None) -> tuple[str, str]:
     if missing:
         raise SystemExit(f"check_r2_token: {env_file} is missing {', '.join(missing)}")
     return values["R2_ACCESS_KEY_ID"], values["R2_SECRET_ACCESS_KEY"]
-
-
-def _client(key_id: str, secret: str):
-    import boto3
-    from botocore.config import Config
-
-    (account,) = require("R2_ACCOUNT_ID")
-    return boto3.client(
-        "s3",
-        endpoint_url=f"https://{account}.r2.cloudflarestorage.com",
-        aws_access_key_id=key_id,
-        aws_secret_access_key=secret,
-        region_name="auto",
-        # A denied call is the expected outcome of three of these checks;
-        # retrying it three times just makes the run slower.
-        config=Config(retries={"max_attempts": 1}),
-    )
 
 
 def _sample_key() -> str:
@@ -95,8 +79,10 @@ def _denied(exc: Exception) -> bool:
 
 def run_checks(key_id: str, secret: str) -> list[tuple[bool, str]]:
     """(passed, description) for each check, in the order they are reported."""
-    s3 = _client(key_id, secret)
-    pages = os.environ.get("R2_BUCKET_PAGES") or require("R2_BUCKET_PAGES")[0]
+    # The credentials under test, not the ambient ones -- that is the whole
+    # point of this tool. max_attempts=1 because a denied call is the expected
+    # outcome of three of these four checks, and retrying it only adds seconds.
+    s3, pages = pages_bucket(key_id=key_id, secret=secret, max_attempts=1)
     originals = os.environ.get("R2_BUCKET")
     results: list[tuple[bool, str]] = []
 

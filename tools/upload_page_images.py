@@ -28,47 +28,24 @@ Keys are byte-identical to the Vercel Blob pathnames they replace, so
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from tools import db
-from tools.env import load_env, require
+from tools.env import load_env
+from tools.pages_bucket import pages_bucket
 
 PAGES_DIR = Path(".tmp/pages")
 PREFIX = "pages/"
 CONCURRENCY = 8
 
-_local = threading.local()
-
-
-def _client():
-    """One boto3 client per thread -- clients are not documented as safe to
-    share across threads for every operation, and the cost of a second one is
-    negligible next to a wrong answer under load."""
-    if not hasattr(_local, "s3"):
-        import boto3
-
-        account, key_id, secret = require("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
-        _local.s3 = boto3.client(
-            "s3",
-            endpoint_url=f"https://{account}.r2.cloudflarestorage.com",
-            aws_access_key_id=key_id,
-            aws_secret_access_key=secret,
-            region_name="auto",
-        )
-    return _local.s3
-
-
-def _bucket() -> str:
-    return os.environ.get("R2_BUCKET_PAGES") or require("R2_BUCKET_PAGES")[0]
-
 
 def existing_keys() -> dict[str, int]:
     """Key -> size for everything already under the prefix."""
-    s3, bucket, found = _client(), _bucket(), {}
+    s3, bucket = pages_bucket()
+    found: dict[str, int] = {}
     token = None
     while True:
         kwargs = {"Bucket": bucket, "Prefix": PREFIX, "MaxKeys": 1000}
@@ -108,8 +85,10 @@ def upload() -> int:
 
     def send(path: Path) -> int:
         nonlocal sent
-        _client().put_object(
-            Bucket=_bucket(),
+        # Called from the pool: pages_bucket() hands each thread its own client.
+        s3, bucket = pages_bucket()
+        s3.put_object(
+            Bucket=bucket,
             Key=_key_for(path),
             Body=path.read_bytes(),
             ContentType="image/webp",
