@@ -112,3 +112,18 @@ export async function touchLastSeen(accountId: string): Promise<void> {
     [accountId],
   );
 }
+
+/** Release both pools. Test teardown only — nothing in the running app calls
+ * this, and a pool that outlives the process it serves is not a problem there.
+ *
+ * `end()` rather than letting the runner force-exit: end() waits for every
+ * checked-out client to come back, so a client leaked by a bug in
+ * withAccount() surfaces as a teardown timeout instead of vanishing with the
+ * process. A leaked client is the one failure in this file RLS cannot make
+ * safe — it holds an open transaction with app.account_id already set. */
+export async function closePools(): Promise<void> {
+  const pools = [_tenantPool, _authPool];
+  _tenantPool = null;
+  _authPool = null;
+  await Promise.all(pools.map((p) => p?.end()));
+}

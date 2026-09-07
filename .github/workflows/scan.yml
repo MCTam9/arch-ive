@@ -85,6 +85,15 @@ jobs:
   #   * tools/embed_chunks.py imports sentence-transformers lazily and
   #     tests/test_inbox.py stubs the module outright, so CI can skip a ~2 GB
   #     torch install without losing coverage.
+  #
+  # The web half runs in this same job rather than a sibling. A second job
+  # would have to repeat the 25 lines of schema provisioning below, and that
+  # provisioning is already what made CI come up red the first time (see the
+  # header of db/test_account.sql) -- one copy of it is the whole point.
+  # web/lib/queries.ts carries the same retrieval policy the Python tests pin,
+  # and until now nothing checked it, typechecked it or linted it: `npm run
+  # build` was the only thing that ever compiled the app, and it runs on
+  # Vercel, after the push.
   tests:
     runs-on: ubuntu-latest
     services:
@@ -104,6 +113,11 @@ jobs:
     env:
       PGPASSWORD: test
       ADMIN_URL: postgresql://postgres:test@localhost:5432/postgres
+      # Job level, not step level: pytest and vitest both read this one
+      # variable (tests/conftest.py and web/tests/support.ts), which is how
+      # the two halves are stopped from provisioning one database and testing
+      # another.
+      TEST_DATABASE_URL: postgresql://arch_app:test@localhost:5432/arch_test
     steps:
       - uses: actions/checkout@v4
 
@@ -111,6 +125,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
       - name: Install dependencies
         run: |
@@ -150,11 +170,31 @@ jobs:
 
       - name: pytest
         env:
-          TEST_DATABASE_URL: postgresql://arch_app:test@localhost:5432/arch_test
           # tests/test_mcp_server.py connects as arch_read, not arch_app --
           # the MCP server exists to prove a read-only role sees the right
-          # rows, so it cannot share the app connection.
+          # rows, so it cannot share the app connection. Stays on this step:
+          # only the Python suite has a read-only half.
           TEST_DATABASE_URL_READONLY: postgresql://arch_read:test@localhost:5432/arch_test
         # -ra prints the skip reasons, so a corpus test quietly turning into a
         # no-op is visible in the log rather than counted as a pass.
         run: pytest -ra -q
+
+      - name: Install web dependencies
+        working-directory: web
+        # ci, not install: it fails on a package-lock.json that has drifted
+        # from package.json rather than quietly rewriting it here.
+        run: npm ci
+
+      - name: Typecheck the web app
+        working-directory: web
+        # Vitest strips types, it does not check them, so this is the only
+        # thing that reads the tsconfig in CI.
+        run: npm run typecheck
+
+      - name: Lint the web app
+        working-directory: web
+        run: npm run lint
+
+      - name: Web tests
+        working-directory: web
+        run: npm test

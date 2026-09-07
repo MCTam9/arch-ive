@@ -177,6 +177,22 @@ The proxy does **no** authorization — that stays in
 
 ## Deploy
 
+### Before the push
+
+```sh
+cd web && npm run typecheck && npm run lint && npm test
+```
+
+A push to `main` deploys, so these three are the last point at which a mistake
+is cheap. `npm run build` on Vercel is the only other thing that compiles the
+app, and by then the deploy is already happening. `.github/workflows/scan.yml`
+runs the same three in the `tests` job — this line exists so the gate is
+readable here too, rather than only being discovered when CI goes red.
+
+`npm test` needs `arch_test`; it refuses to start against any other database
+(`web/tests/setup.ts`), for the reason recorded in `tests/conftest.py`.
+`npm run test:unit` is the subset that needs no Postgres at all.
+
 The GitHub repo is connected to the Vercel project (production branch `main`,
 **Root Directory `web`** — the repo root has no `package.json`, so a
 git-triggered build fails without it). **A push to `main` deploys.** The CLI

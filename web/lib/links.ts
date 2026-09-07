@@ -64,10 +64,20 @@ export function browseHref(params: Record<string, QueryValue> = {}): string {
  *  Same rule the `ret` parameter has always used: it must be a path on this
  *  site. `//evil.example` is a protocol-relative URL that browsers treat as
  *  absolute, so "starts with /" alone is not enough.
+ *
+ *  Nor is rejecting `//` alone. This used to be `!startsWith("//")`, which let
+ *  `/\evil.example` through — Chrome and Safari normalise the backslash to a
+ *  forward slash before resolving, so that is the same protocol-relative URL
+ *  spelled differently, and it reached the login `next` redirect
+ *  (`lib/session.ts`) and every `ret` back-link. So: any combination of `/`
+ *  and `\` in the first two characters is off-site.
  */
 export function safePath(candidate: string | undefined | null): string | null {
   if (!candidate) return null;
-  return candidate.startsWith("/") && !candidate.startsWith("//") ? candidate : null;
+  if (!candidate.startsWith("/")) return null;
+  const second = candidate[1];
+  if (second === "/" || second === "\\") return null;
+  return candidate;
 }
 
 /** Where "back" goes from an item, and what to call it.
