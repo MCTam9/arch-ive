@@ -5,15 +5,15 @@ cleanup to its own tmp_path (for ingest_job, via source_path) or to a
 'test-' slug prefix (for source_document), so the suite is safe to re-run
 against a shared database.
 
-Two sibling modules this pipeline calls (tools/build_structure.py,
-tools/write_extraction.py, tools/embed_chunks.py) are owned by other agents
-working in parallel and may not exist yet in this checkout. `tools/classify_
-document.py` and `tools/ingest_document.py` are used for real -- they were
-available when this suite was written. Where a sibling module is still
-missing, `fake_stage_modules` installs a minimal stand-in into sys.modules
-for the duration of a test (never written to disk) so the orchestrator's own
-wiring -- the thing this file actually tests -- can be exercised end to end
-regardless of build order.
+What this file tests is the orchestrator's own wiring: the stage sequence in
+pipeline.STAGES, resume, and the terminal moves. The work the later stages
+delegate to belongs to other modules with their own tests, and a synthetic
+one-page PDF gives them nothing to do -- so `stub_downstream_stages` replaces
+those entries' `run` for the duration of a test. It stubs by state rather
+than by module, which is why wiring another tool into an existing stage (see
+pipeline.ENRICHMENTS) needs no change here. `tools/classify_document.py` and
+`tools/ingest_document.py` run unmodified: everything up to `pages` is the
+part this suite is about.
 """
 from __future__ import annotations
 
@@ -21,9 +21,7 @@ import hashlib
 import os
 import shutil
 import subprocess
-import sys
 import time
-import types
 from pathlib import Path
 
 import pymupdf
@@ -88,39 +86,39 @@ def inbox_env(tmp_path, monkeypatch):
     return inbox_dir
 
 
+# The stages this suite drives through rather than exercises. Structure
+# detection, extraction, enrichment and embedding each have their own tests
+# and each want a document with real content; what matters here is that the
+# sequence reaches them in order and finishes.
+STUBBED_STATES = frozenset(
+    {
+        pipeline.State.STRUCTURED,
+        pipeline.State.EXTRACTED,
+        pipeline.State.ENRICHED,
+        pipeline.State.EMBEDDED,
+    }
+)
+
+
 @pytest.fixture
-def fake_stage_modules(monkeypatch):
-    """Stand-ins for sibling stages not yet built in this checkout, so the
-    orchestrator can be driven all the way to 'done'/'needs_review'. Real
-    modules (classify_document, ingest_document) are used unmodified."""
-    build_structure = types.ModuleType("tools.build_structure")
-    build_structure.build_structure = lambda conn, document_id, path: 0
-    write_extraction = types.ModuleType("tools.write_extraction")
-    write_extraction.write_extraction = lambda conn, document_id, extraction: {"items": 0}
-    embed_chunks = types.ModuleType("tools.embed_chunks")
-    embed_chunks.embed_pending = lambda conn, document_id=None: 0
-    # The embed stage does `from tools.embed_chunks import embed_pending,
-    # model_available`, and a stub missing either name raises ImportError --
-    # which the runner records as a stage failure, so the job stops at
-    # 'extracted' and the crash-resume assertion fails a long way from the
-    # cause. A stub has to carry the whole imported surface, not just the
-    # function the test cares about.
-    embed_chunks.model_available = lambda: True
+def stub_downstream_stages(monkeypatch):
+    """Replace the run function of every stubbed stage in pipeline.STAGES, so
+    the orchestrator can be driven all the way to 'done'/'needs_review'.
 
-    for name, mod in {
-        "tools.build_structure": build_structure,
-        "tools.write_extraction": write_extraction,
-        "tools.embed_chunks": embed_chunks,
-    }.items():
-        monkeypatch.setitem(sys.modules, name, mod)
+    Still goes through ii._run, so each one records its ingest_stage_run row
+    and advances ingest_job.state exactly as the real stage would -- that is
+    what the resume assertions read.
+    """
+    def stub_for(state):
+        def run(ctx, *, force):
+            ii._run(ctx.job_id, state, lambda conn: {"stubbed": True}, force=force)
+            return None
+        return run
 
-    class _FakeExtractor:
-        doc_kinds = ("unknown",)
-
-        def extract(self, ctx):
-            return pipeline.Extraction()
-
-    monkeypatch.setitem(pipeline._REGISTRY, "unknown", _FakeExtractor())
+    stubbed = [s for s in pipeline.STAGES if s.state in STUBBED_STATES]
+    assert len(stubbed) == len(STUBBED_STATES), "a stubbed state left the sequence"
+    for stage in stubbed:
+        monkeypatch.setattr(stage, "run", stub_for(stage.state))
 
 
 @pytest.fixture(autouse=True)
@@ -296,7 +294,7 @@ def test_duplicate_by_hash(inbox_env):
 # ── revision by slug ──────────────────────────────────────────────────────
 
 
-def test_revision_by_slug(inbox_env, fake_stage_modules):
+def test_revision_by_slug(inbox_env, stub_downstream_stages):
     """As of this writing this test fails, and the failure is not in this
     module: tools/ingest_document.py's register_document() INSERTs the new
     source_document row before it UPDATEs the previous row's is_current to
@@ -354,7 +352,7 @@ def test_revision_by_slug(inbox_env, fake_stage_modules):
 # ── crash-resume ──────────────────────────────────────────────────────────
 
 
-def test_crash_resume(inbox_env, fake_stage_modules, monkeypatch):
+def test_crash_resume(inbox_env, stub_downstream_stages, monkeypatch):
     """Simulate a process death right after the 'classified' stage recorded
     ok: the file is left sitting in _processing/ with no finalizing move.
     A fresh sweep must resume that exact job -- not re-run stages that
@@ -375,9 +373,12 @@ def test_crash_resume(inbox_env, fake_stage_modules, monkeypatch):
     shutil.move(str(src), str(processing_path))  # as if a prior run had already picked it up
 
     job_id = ii._find_or_create_job(processing_path, processing_path.name)
-    sha = ii._run_hashed(job_id, processing_path, force=False)
-    assert ii._run_deduped(job_id, sha, force=False) is None
-    ii._run_classified(job_id, processing_path, force=False)
+    ctx = ii.IngestContext(
+        inbox_dir=inbox_env, job_id=job_id, path=processing_path, static_meta={}
+    )
+    ii._run_hashed(ctx, force=False)
+    assert ii._run_deduped(ctx, force=False) is None
+    ii._run_classified(ctx, force=False)
     assert calls["n"] == 1
     # <-- the process "dies" here: no more stages run, file stays put
 

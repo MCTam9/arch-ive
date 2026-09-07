@@ -29,7 +29,7 @@ import os
 import re
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -441,10 +441,34 @@ def _describe(path: Path) -> str:
 
 # ── stage wrappers ──────────────────────────────────────────────────────
 #
-# Each wraps one pipeline.run_stage call. run_stage returns only a bool, so
-# after it we re-read that stage's recorded `stats` from ingest_stage_run --
-# this makes the decision resumable too: a rerun that short-circuits inside
-# run_stage (prior status already 'ok') still gets the same stats back.
+# Each wraps one pipeline.run_stage call and is bound to its entry in
+# pipeline.STAGES, which is the only statement of what runs in what order.
+# run_stage returns only a bool, so after it we re-read that stage's recorded
+# `stats` from ingest_stage_run -- this makes the decision resumable too: a
+# rerun that short-circuits inside run_stage (prior status already 'ok')
+# still gets the same stats back.
+#
+# Every wrapper takes the same IngestContext, reads what earlier stages put
+# there and writes its own result back, so the sequence can be iterated
+# without the caller threading a different argument list per stage.
+
+
+@dataclass
+class IngestContext:
+    """What the stages share. Fields past `static_meta` are filled in by the
+    stage that produces them, in STAGES order."""
+    inbox_dir: Path
+    job_id: str
+    path: Path                          # the file, inside _processing/
+    static_meta: dict[str, Any]
+    sha256: str = ""
+    doc_kind_guess: str = ""
+    confidence: float = 0.0
+    slug: str = ""
+    doc_kind: str = ""
+    meta: dict[str, Any] = field(default_factory=dict)
+    document_id: str = ""
+    page_count: int = 0
 
 
 class StageFailure(Exception):
@@ -472,7 +496,10 @@ def _run(job_id: str, stage: pipeline.State, fn, *, force: bool) -> dict:
     return _stage_stats(job_id, stage)
 
 
-def _run_hashed(job_id: str, path: Path, *, force: bool) -> str:
+@pipeline.runs_stage(pipeline.State.HASHED)
+def _run_hashed(ctx: IngestContext, *, force: bool) -> None:
+    job_id, path = ctx.job_id, ctx.path
+
     def fn(conn):
         sha = sha256_of_file(path)
         size = path.stat().st_size
@@ -482,10 +509,14 @@ def _run_hashed(job_id: str, path: Path, *, force: bool) -> str:
         )
         return {"sha256": sha, "size_bytes": size}
 
-    return _run(job_id, pipeline.State.HASHED, fn, force=force)["sha256"]
+    ctx.sha256 = _run(job_id, pipeline.State.HASHED, fn, force=force)["sha256"]
+    return None
 
 
-def _run_deduped(job_id: str, sha: str, *, force: bool) -> str | None:
+@pipeline.runs_stage(pipeline.State.DEDUPED)
+def _run_deduped(ctx: IngestContext, *, force: bool) -> pipeline.Halt | None:
+    job_id, sha = ctx.job_id, ctx.sha256
+
     def fn(conn):
         # sha256 is UNIQUE on source_document regardless of revision status --
         # any match at all means these exact bytes are already in the corpus.
@@ -500,10 +531,16 @@ def _run_deduped(job_id: str, sha: str, *, force: bool) -> str | None:
             return {"duplicate_of_slug": existing["slug"]}
         return {"duplicate_of_slug": None}
 
-    return _run(job_id, pipeline.State.DEDUPED, fn, force=force).get("duplicate_of_slug")
+    dup_slug = _run(job_id, pipeline.State.DEDUPED, fn, force=force).get("duplicate_of_slug")
+    if dup_slug is None:
+        return None
+    return pipeline.Halt("duplicate", lambda c: _finalize_duplicate(c, dup_slug))
 
 
-def _run_classified(job_id: str, path: Path, *, force: bool) -> tuple[str, float]:
+@pipeline.runs_stage(pipeline.State.CLASSIFIED)
+def _run_classified(ctx: IngestContext, *, force: bool) -> None:
+    job_id, path = ctx.job_id, ctx.path
+
     def fn(conn):
         from tools.classify_document import classify
 
@@ -515,12 +552,20 @@ def _run_classified(job_id: str, path: Path, *, force: bool) -> tuple[str, float
         return {"doc_kind": doc_kind, "confidence": confidence}
 
     stats = _run(job_id, pipeline.State.CLASSIFIED, fn, force=force)
-    return stats["doc_kind"], stats["confidence"]
+    ctx.doc_kind_guess, ctx.confidence = stats["doc_kind"], stats["confidence"]
+    # the identity every later stage works from: what the file says about
+    # itself, overridden by whatever a sidecar or documents.yaml declared
+    ctx.slug = ctx.static_meta.get("slug") or f"unfiled-{ctx.sha256[:12]}"
+    ctx.doc_kind = ctx.static_meta.get("doc_kind") or ctx.doc_kind_guess
+    ctx.meta = {k: v for k, v in ctx.static_meta.items() if k not in ("slug", "doc_kind")}
+    return None
 
 
-def _run_registered(
-    job_id: str, path: Path, sha: str, slug: str, doc_kind: str, meta: dict, *, force: bool
-) -> str:
+@pipeline.runs_stage(pipeline.State.REGISTERED)
+def _run_registered(ctx: IngestContext, *, force: bool) -> None:
+    job_id, path, sha = ctx.job_id, ctx.path, ctx.sha256
+    slug, doc_kind, meta = ctx.slug, ctx.doc_kind, ctx.meta
+
     def fn(conn):
         from tools.ingest_document import register_document
 
@@ -530,10 +575,14 @@ def _run_registered(
         conn.execute("UPDATE ingest_job SET document_id = %s WHERE id = %s", (document_id, job_id))
         return {"document_id": str(document_id)}
 
-    return _run(job_id, pipeline.State.REGISTERED, fn, force=force)["document_id"]
+    ctx.document_id = _run(job_id, pipeline.State.REGISTERED, fn, force=force)["document_id"]
+    return None
 
 
-def _run_archived(job_id: str, path: Path, sha: str, slug: str, *, force: bool) -> str | None:
+@pipeline.runs_stage(pipeline.State.ARCHIVED)
+def _run_archived(ctx: IngestContext, *, force: bool) -> None:
+    job_id, path, sha, slug = ctx.job_id, ctx.path, ctx.sha256, ctx.slug
+
     def fn(conn):
         from tools.archive_original import archive
 
@@ -544,39 +593,50 @@ def _run_archived(job_id: str, path: Path, sha: str, slug: str, *, force: bool) 
         )
         return {"r2_key": r2_key}
 
-    return _run(job_id, pipeline.State.ARCHIVED, fn, force=force).get("r2_key")
+    _run(job_id, pipeline.State.ARCHIVED, fn, force=force)
+    return None
 
 
-def _run_pages(job_id: str, document_id: str, path: Path, *, force: bool) -> int:
+@pipeline.runs_stage(pipeline.State.PAGES)
+def _run_pages(ctx: IngestContext, *, force: bool) -> None:
+    job_id, document_id, path = ctx.job_id, ctx.document_id, ctx.path
+
     def fn(conn):
         from tools.ingest_document import extract_pages
 
         count = extract_pages(conn, document_id, path)
         return {"page_count": count}
 
-    return _run(job_id, pipeline.State.PAGES, fn, force=force).get("page_count", 0)
+    ctx.page_count = _run(job_id, pipeline.State.PAGES, fn, force=force).get("page_count", 0)
+    return None
 
 
-def _run_structured(job_id: str, document_id: str, path: Path, *, force: bool) -> int:
+@pipeline.runs_stage(pipeline.State.STRUCTURED)
+def _run_structured(ctx: IngestContext, *, force: bool) -> None:
+    job_id, document_id, path = ctx.job_id, ctx.document_id, ctx.path
+
     def fn(conn):
         from tools.build_structure import build_structure
 
         count = build_structure(conn, document_id, path)
         return {"node_count": count}
 
-    return _run(job_id, pipeline.State.STRUCTURED, fn, force=force).get("node_count", 0)
+    _run(job_id, pipeline.State.STRUCTURED, fn, force=force)
+    return None
 
 
-def _run_extracted(
-    job_id: str, document_id: str, slug: str, doc_kind: str, path: Path, page_count: int, meta: dict, *, force: bool
-) -> None:
+@pipeline.runs_stage(pipeline.State.EXTRACTED)
+def _run_extracted(ctx: IngestContext, *, force: bool) -> None:
+    job_id, document_id, path = ctx.job_id, ctx.document_id, ctx.path
+    slug, doc_kind, page_count, meta = ctx.slug, ctx.doc_kind, ctx.page_count, ctx.meta
+
     def fn(conn):
         pipeline.load_extractors()
         extractor = pipeline.for_doc_kind(doc_kind)
         pages = db.all_rows(
             conn, "SELECT * FROM source_page WHERE document_id = %s ORDER BY page_index", (document_id,)
         )
-        ctx = pipeline.DocumentContext(
+        doc_ctx = pipeline.DocumentContext(
             document_id=str(document_id),
             slug=slug,
             path=path,
@@ -585,7 +645,7 @@ def _run_extracted(
             pages=pages,
             meta=meta,
         )
-        extraction = extractor.extract(ctx)
+        extraction = extractor.extract(doc_ctx)
 
         from tools.write_extraction import write_extraction
 
@@ -593,23 +653,29 @@ def _run_extracted(
         return counts if isinstance(counts, dict) else {"result": counts}
 
     _run(job_id, pipeline.State.EXTRACTED, fn, force=force)
+    return None
 
 
-def _run_enriched(job_id: str, document_id: str, *, force: bool) -> None:
+@pipeline.runs_stage(pipeline.State.ENRICHED)
+def _run_enriched(ctx: IngestContext, *, force: bool) -> None:
+    """Every pure-DB enrichment tool, in pipeline.ENRICHMENTS order, in one
+    transaction. See that declaration for why they share one state."""
+    job_id, document_id, slug = ctx.job_id, ctx.document_id, ctx.slug
+
     def fn(conn):
-        try:
-            from tools.enrich_document import enrich
-        except ImportError as exc:
-            # No cross-module signature for this stage is defined in
-            # CONTRACT.md yet. Treat "not built" as nothing-to-do rather than
-            # failing a document that is otherwise fully extracted.
-            raise pipeline.StageSkipped(f"enrich module unavailable: {exc}") from exc
-        return enrich(conn, document_id) or {}
+        return {
+            step.name: step.run(conn, document_id=document_id, slug=slug)
+            for step in pipeline.ENRICHMENTS
+        }
 
     _run(job_id, pipeline.State.ENRICHED, fn, force=force)
+    return None
 
 
-def _run_embedded(job_id: str, document_id: str, *, force: bool) -> None:
+@pipeline.runs_stage(pipeline.State.EMBEDDED)
+def _run_embedded(ctx: IngestContext, *, force: bool) -> None:
+    job_id, document_id = ctx.job_id, ctx.document_id
+
     def fn(conn):
         from tools.embed_chunks import embed_pending, model_available
 
@@ -621,6 +687,7 @@ def _run_embedded(job_id: str, document_id: str, *, force: bool) -> None:
         return {"embedded": count}
 
     _run(job_id, pipeline.State.EMBEDDED, fn, force=force)
+    return None
 
 
 # ── job bookkeeping ──────────────────────────────────────────────────────
@@ -652,38 +719,44 @@ def _find_or_create_job(processing_path: Path, original_filename: str) -> str:
         return job_id
 
 
-def _finalize_duplicate(inbox_dir: Path, job_id: str, processing_path: Path, dup_slug: str) -> None:
-    dest = _move(processing_path, inbox_dir / "_duplicates")
-    print(f"duplicate: job={job_id} matches existing slug={dup_slug!r} -> {dest.relative_to(inbox_dir)}")
+def _finalize_duplicate(ctx: IngestContext, dup_slug: str) -> None:
+    dest = _move(ctx.path, ctx.inbox_dir / "_duplicates")
+    print(
+        f"duplicate: job={ctx.job_id} matches existing slug={dup_slug!r} "
+        f"-> {dest.relative_to(ctx.inbox_dir)}"
+    )
 
 
-def _finalize_review(inbox_dir: Path, job_id: str, processing_path: Path, slug: str) -> None:
-    dest = _move(processing_path, inbox_dir / "_review")
+def _finalize_review(ctx: IngestContext) -> None:
+    dest = _move(ctx.path, ctx.inbox_dir / "_review")
     with db.connect() as conn:
         conn.execute(
-            "UPDATE ingest_job SET state = 'needs_review', updated_at = now() WHERE id = %s", (job_id,)
+            "UPDATE ingest_job SET state = 'needs_review', updated_at = now() WHERE id = %s",
+            (ctx.job_id,),
         )
         conn.commit()
-    print(f"needs_review: job={job_id} slug={slug!r} -> {dest.relative_to(inbox_dir)}")
+    print(f"needs_review: job={ctx.job_id} slug={ctx.slug!r} -> {dest.relative_to(ctx.inbox_dir)}")
 
 
-def _finalize_done(inbox_dir: Path, job_id: str, processing_path: Path, slug: str) -> None:
-    day_dir = inbox_dir / "_done" / dt.date.today().isoformat()
-    dest = _move(processing_path, day_dir)
+def _finalize_done(ctx: IngestContext) -> None:
+    day_dir = ctx.inbox_dir / "_done" / dt.date.today().isoformat()
+    dest = _move(ctx.path, day_dir)
     with db.connect() as conn:
-        conn.execute("UPDATE ingest_job SET state = 'done', updated_at = now() WHERE id = %s", (job_id,))
+        conn.execute(
+            "UPDATE ingest_job SET state = 'done', updated_at = now() WHERE id = %s", (ctx.job_id,)
+        )
         conn.commit()
-    print(f"done: job={job_id} slug={slug!r} -> {dest.relative_to(inbox_dir)}")
+    print(f"done: job={ctx.job_id} slug={ctx.slug!r} -> {dest.relative_to(ctx.inbox_dir)}")
 
 
-def _handle_failure(inbox_dir: Path, job_id: str, processing_path: Path, stage: str, error: str) -> None:
-    dest = _move(processing_path, inbox_dir / "_failed")
+def _handle_failure(ctx: IngestContext, stage: str, error: str) -> None:
+    dest = _move(ctx.path, ctx.inbox_dir / "_failed")
     error_path = dest.with_name(dest.name + ".error.json")
     error_path.write_text(
-        json.dumps({"job_id": str(job_id), "stage": stage, "error": error}, indent=2),
+        json.dumps({"job_id": str(ctx.job_id), "stage": stage, "error": error}, indent=2),
         encoding="utf-8",
     )
-    print(f"failed: job={job_id} stage={stage} -> {dest.relative_to(inbox_dir)}")
+    print(f"failed: job={ctx.job_id} stage={stage} -> {dest.relative_to(ctx.inbox_dir)}")
 
 
 # ── the per-file pipeline ────────────────────────────────────────────────
@@ -692,39 +765,34 @@ def _handle_failure(inbox_dir: Path, job_id: str, processing_path: Path, stage: 
 def _ingest(
     inbox_dir: Path, processing_path: Path, known_docs: dict[str, dict], *, force: bool
 ) -> None:
-    original_filename = processing_path.name
-    job_id = _find_or_create_job(processing_path, original_filename)
-    static_meta = resolve_static_meta(inbox_dir, known_docs, processing_path)
+    ctx = IngestContext(
+        inbox_dir=inbox_dir,
+        job_id=_find_or_create_job(processing_path, processing_path.name),
+        path=processing_path,
+        static_meta=resolve_static_meta(inbox_dir, known_docs, processing_path),
+    )
 
     try:
-        sha = _run_hashed(job_id, processing_path, force=force)
-        dup_slug = _run_deduped(job_id, sha, force=force)
-        if dup_slug is not None:
-            _finalize_duplicate(inbox_dir, job_id, processing_path, dup_slug)
+        for stage in pipeline.stage_sequence():
+            halt = stage.run(ctx, force=force)
+            if halt is None:
+                continue
+            if not stage.ends_run:
+                # a stage that finishes a job without saying so in STAGES is a
+                # bug in the sequence, not something to act on quietly
+                raise RuntimeError(
+                    f"stage {stage.state.value} returned {halt.reason!r} but is not ends_run"
+                )
+            halt.finalize(ctx)
             return
-
-        doc_kind_guess, confidence = _run_classified(job_id, processing_path, force=force)
-        slug = static_meta.get("slug") or f"unfiled-{sha[:12]}"
-        doc_kind = static_meta.get("doc_kind") or doc_kind_guess
-        meta = {k: v for k, v in static_meta.items() if k not in ("slug", "doc_kind")}
-
-        document_id = _run_registered(job_id, processing_path, sha, slug, doc_kind, meta, force=force)
-        _run_archived(job_id, processing_path, sha, slug, force=force)
-        page_count = _run_pages(job_id, document_id, processing_path, force=force)
-        _run_structured(job_id, document_id, processing_path, force=force)
-        _run_extracted(
-            job_id, document_id, slug, doc_kind, processing_path, page_count, meta, force=force
-        )
-        _run_enriched(job_id, document_id, force=force)
-        _run_embedded(job_id, document_id, force=force)
     except StageFailure as fail:
-        _handle_failure(inbox_dir, job_id, processing_path, fail.stage, fail.error)
+        _handle_failure(ctx, fail.stage, fail.error)
         return
 
-    if confidence < CONFIDENCE_THRESHOLD:
-        _finalize_review(inbox_dir, job_id, processing_path, slug)
+    if ctx.confidence < CONFIDENCE_THRESHOLD:
+        _finalize_review(ctx)
     else:
-        _finalize_done(inbox_dir, job_id, processing_path, slug)
+        _finalize_done(ctx)
 
 
 def process_file(

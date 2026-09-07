@@ -37,13 +37,48 @@ The pipeline moves files, never deletes them:
 
 ## Stages
 
-`discovered → stable → hashed → deduped → classified → registered → archived →
-pages → structured → extracted → enriched → embedded → done`
+**The order is `STAGES` in `tools/pipeline.py`, and only there.** It pairs each
+state with the function that runs it, `tools/ingest_inbox.py` iterates it, and
+this table describes that list rather than being a second copy of it. It used
+to be a second copy, and the second half of it had drifted out of the code
+entirely.
+
+`discovered` and `stable` are not stages: a file is seen, then held until its
+size and mtime stop moving, before any job has something to record. Everything
+after that:
+
+| Stage | What runs | Worth knowing |
+|---|---|---|
+| `hashed` | SHA-256 and size onto `ingest_job` | identity is content, never the filename |
+| `deduped` | sha lookup against `source_document` | the only stage that can end a job early — a match files the original to `_duplicates/` and nothing after it runs |
+| `classified` | `tools/classify_document.py` | its confidence is what decides `_done/` against `_review/` at the very end |
+| `registered` | `ingest_document.register_document` | revision handling; sets `ingest_job.document_id` |
+| `archived` | `archive_original.archive` | before extraction on purpose: an extraction failure can never lose the file |
+| `pages` | `ingest_document.extract_pages` | `source_page`, `source_asset`, page renders |
+| `structured` | `build_structure.build_structure` | `doc_node` from bookmarks, or heading detection |
+| `extracted` | the registered extractor, then `write_extraction` | the extractor is pure; the caller writes |
+| `enriched` | `pipeline.ENRICHMENTS`, in order | `classify_facets` → `link_stages` → `chunk_pages` → `chunk_figures` → `refresh_chunk_text` |
+| `embedded` | `embed_chunks.embed_pending` | *skipped*, not failed, where `sentence-transformers` is absent |
 
 Each is idempotent and keyed on `(job_id, stage)` in `ingest_stage_run`, so a
-restart re-runs only what did not finish. `archived` comes early and
-deliberately: the original is filed and pushed before extraction, so an
-extraction failure can never lose the file.
+restart re-runs only what did not finish.
+
+### Why the five enrichment tools share one stage
+
+`ingest_state` in `db/schema.sql` has exactly one name — `enriched` — for all of
+them, `ingest_job.state` and `ingest_stage_run.stage` are both that enum, and
+`ingest_stage_run` is `UNIQUE (job_id, stage)`. So they are five steps inside
+one stage and one transaction, not five resume points: a failure in any of them
+rolls back all five and re-runs all five. Splitting one out means adding an enum
+value first, in a migration, and only then moving it into `STAGES`.
+
+`refresh_chunk_text` runs last of the five because rewriting a chunk clears its
+`embedding`, and `embedded` is the stage after.
+
+**`crop_figures`, `describe_figures` and `upload_page_images` are deliberately
+not in the sequence.** They need R2, a restored original and externally-produced
+model output; dropping a file into `inbox/` must not start doing network I/O.
+They stay manual, and the sections below are how to run them.
 
 ## Expected outputs
 
@@ -54,6 +89,10 @@ extraction failure can never lose the file.
   document has no TOC.
 - `knowledge_item` rows with subtype payloads, each resolving to a `citation`
   carrying both the PDF page index and the printed page label.
+- `item_term` facet tags and `item_stage` links, from the `enriched` stage.
+- `chunk` rows for the items, for every page no item was extracted from
+  (windowed), and for every figure already carrying a description — with an
+  embedding, unless `sentence-transformers` is absent and `embedded` skipped.
 
 ## What a chunk says
 
@@ -68,9 +107,15 @@ requirement's context lives in the join to `criterion` and `rating_level`. So
 `tools/write_extraction.py` writes the title-and-statement chunk first, then
 calls `tools/refresh_chunk_text.py` to compose the typed facts in.
 
-That is one function with two callers, deliberately: the writer runs it per
-document at ingest, and the CLI runs it over an existing corpus after the
-composer changes.
+That is one function with three callers, deliberately: the writer runs it
+inline, the `enriched` stage runs it again over the whole document once the
+page and figure chunks exist, and the CLI runs it over an existing corpus after
+the composer changes. All three go through the same `refresh()`, so they cannot
+drift about what a typed chunk says.
+
+The commands below are the corpus-wide form. A document coming through `inbox/`
+needs neither: `refresh_chunk_text` is a step of `enriched`, and `embed_chunks`
+is the stage straight after it.
 
 ```sh
 python3 -m tools.refresh_chunk_text                    # dry run, prints before/after
@@ -196,6 +241,10 @@ python3 -m tools.embed_chunks
 python3 -m tools.chunk_pages --status
 ```
 
+The `enriched` stage calls `plan()` then `apply()` for the one document it is
+ingesting, so this CLI is for re-windowing the existing corpus after `split()`
+changes — the `--yes` gate is the CLI's, not the function's.
+
 - **The budget is tokens, not characters.** Prose in this corpus runs to 6.5
   characters per token; a page of dimensions and codes runs to 1.3. A fixed
   character window sized for prose still overflowed on the densest pages —
@@ -243,6 +292,9 @@ python3 -m tools.chunk_figures --status
 - Run it against **both** databases, like every other write in this workflow.
   Roughly 30-45s against Neon, almost all of it per-row UPDATEs rather than the
   model.
+- It is also a step of the `enriched` stage, which is what makes a re-ingest
+  (`--force <sha>`) pick up descriptions written since the last run. Describing
+  is still manual; only the indexing of what has been described is automatic.
 
 ### Every run leaves an audit row
 
