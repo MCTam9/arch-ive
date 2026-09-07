@@ -1,5 +1,5 @@
 import { requireSession } from "@/lib/session";
-import { listFrameworks, getMatrixDocuments, getMatrix } from "@/lib/queries";
+import { listFrameworks, getMatrixDocuments, getMatrix, type MatrixCell } from "@/lib/queries";
 import { href, backParams, BROWSE_PATH } from "@/lib/links";
 import { first, type RawSearchParams } from "@/lib/params";
 import Link from "next/link";
@@ -48,7 +48,14 @@ export default async function MatrixPage({
     ? requestedDocument
     : documents[0]?.slug;
 
-  const { levels, criteria, cells } = await getMatrix(session.accountId, frameworkSlug, documentSlug);
+  // Assembled rows, not a Map the page has to know the key convention of.
+  // `cells[i]` is `levels[i]`, always present, so there is no lookup here to
+  // get wrong and no `?? []` turning a mismatch into a table of em-dashes.
+  const { levels, rows, hasUnassigned } = await getMatrix(
+    session.accountId,
+    frameworkSlug,
+    documentSlug,
+  );
   const matrixHref = href("/matrix", { framework: frameworkSlug, document: documentSlug });
 
   return (
@@ -98,7 +105,11 @@ export default async function MatrixPage({
         </Button>
       </form>
 
-      {criteria.length === 0 || levels.length === 0 ? (
+      {/* A framework with no rating scale still has requirements, and they
+          now have a column to sit in — so "no levels" is only empty when
+          there is nothing unassigned either. Before, every such framework
+          reported itself empty while holding all of its requirements. */}
+      {rows.length === 0 || (levels.length === 0 && !hasUnassigned) ? (
         <EmptyState title="Nothing in this sheet">
           This framework has no criteria for the selected sheet. Pick another sheet above, or
           switch framework.
@@ -152,10 +163,33 @@ export default async function MatrixPage({
                     </span>
                   </th>
                 ))}
+                {/* Requirements the sheet states without a level band. They
+                    are real requirements — the old lookup built the key
+                    `${criterion}::null`, which nothing ever asked for, so
+                    they were dropped in silence rather than shown. */}
+                {hasUnassigned && (
+                  <th
+                    title="Stated without a rating level"
+                    style={{
+                      textAlign: "left",
+                      padding: "var(--s-2)",
+                      border: "var(--border-width) solid var(--border-strong)",
+                      background: "var(--surface-sunken)",
+                      color: "var(--text)",
+                    }}
+                  >
+                    <span className="font-mono" style={{ fontSize: "var(--fs-sm)", fontWeight: 700 }}>
+                      —
+                    </span>{" "}
+                    <span className="font-display" style={{ fontSize: "var(--fs-label)" }}>
+                      No level
+                    </span>
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
-              {criteria.map((c) => (
+              {rows.map(({ criterion: c, cells, unassigned }) => (
                 <tr key={c.id}>
                   <td
                     className="font-mono"
@@ -172,53 +206,15 @@ export default async function MatrixPage({
                       {c.title}
                     </div>
                   </td>
-                  {levels.map((lvl) => {
-                    const cellItems = cells.get(`${c.id}::${lvl.id}`) ?? [];
-                    return (
-                      <td
-                        key={lvl.id}
-                        style={{
-                          padding: "var(--s-2)",
-                          border: "var(--border-width) solid var(--border)",
-                          verticalAlign: "top",
-                        }}
-                      >
-                        {cellItems.length === 0 ? (
-                          <span className="text-muted font-mono" style={{ fontSize: "var(--fs-micro)" }}>
-                            —
-                          </span>
-                        ) : (
-                          <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
-                            {cellItems.map((cell) => (
-                              <li key={cell.knowledge_item_id}>
-                                {/* `link`, not colour: "inherit" — a cell sits
-                                    on a level band, and an inherited colour
-                                    made the one interactive thing in the table
-                                    indistinguishable from the label beside it
-                                    apart from an underline. */}
-                                <Link
-                                  href={href(`/item/${cell.knowledge_item_id}`, backParams("matrix", matrixHref))}
-                                  className="link font-body"
-                                  style={{ fontSize: "var(--fs-sm)" }}
-                                >
-                                  {cell.statement || cell.target_text}
-                                </Link>
-                                <div style={{ display: "flex", gap: "var(--s-1)", alignItems: "center", marginTop: 2 }}>
-                                  {cell.target_text && cell.target_text !== cell.statement && (
-                                    <Mono style={{ fontSize: "var(--fs-micro)" }} className="text-muted">
-                                      {cell.target_text}
-                                      {cell.unit ? ` ${cell.unit}` : ""}
-                                    </Mono>
-                                  )}
-                                  <StatusFlag status={cell.content_status} />
-                                </div>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </td>
-                    );
-                  })}
+                  {/* Iterating the row's own cells, not the levels: the two
+                      arrays are the same length by construction, so there is
+                      nothing here to keep in step by hand. */}
+                  {cells.map((cellItems, i) => (
+                    <MatrixCellList key={levels[i].id} items={cellItems} matrixHref={matrixHref} />
+                  ))}
+                  {hasUnassigned && (
+                    <MatrixCellList items={unassigned} matrixHref={matrixHref} />
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -226,5 +222,53 @@ export default async function MatrixPage({
         </div>
       )}
     </div>
+  );
+}
+
+// One cell of the table, level column or "no level" column alike. Extracted
+// because the unassigned column renders exactly the same thing, and a second
+// copy of it is how the two would drift.
+function MatrixCellList({ items, matrixHref }: { items: MatrixCell[]; matrixHref: string }) {
+  return (
+    <td
+      style={{
+        padding: "var(--s-2)",
+        border: "var(--border-width) solid var(--border)",
+        verticalAlign: "top",
+      }}
+    >
+      {items.length === 0 ? (
+        <span className="text-muted font-mono" style={{ fontSize: "var(--fs-micro)" }}>
+          —
+        </span>
+      ) : (
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
+          {items.map((cell) => (
+            <li key={cell.knowledge_item_id}>
+              {/* `link`, not colour: "inherit" — a cell sits on a level band,
+                  and an inherited colour made the one interactive thing in
+                  the table indistinguishable from the label beside it apart
+                  from an underline. */}
+              <Link
+                href={href(`/item/${cell.knowledge_item_id}`, backParams("matrix", matrixHref))}
+                className="link font-body"
+                style={{ fontSize: "var(--fs-sm)" }}
+              >
+                {cell.statement || cell.target_text}
+              </Link>
+              <div style={{ display: "flex", gap: "var(--s-1)", alignItems: "center", marginTop: 2 }}>
+                {cell.target_text && cell.target_text !== cell.statement && (
+                  <Mono style={{ fontSize: "var(--fs-micro)" }} className="text-muted">
+                    {cell.target_text}
+                    {cell.unit ? ` ${cell.unit}` : ""}
+                  </Mono>
+                )}
+                <StatusFlag status={cell.content_status} />
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </td>
   );
 }

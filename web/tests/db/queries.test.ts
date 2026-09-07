@@ -29,9 +29,12 @@ import {
   getFacetOptions,
   getHomeSummary,
   getKnowledgeItem,
+  getMatrix,
+  listIngestJobs,
   listKnowledgeItems,
   listReviewQueue,
   type BrowseItem,
+  type MatrixCell,
 } from "@/lib/queries";
 import { TEST_ACCOUNT_ID } from "../support";
 
@@ -443,5 +446,290 @@ describe("ranked search across the three kinds", () => {
         ids.assetOnWipPage,
       ]),
     );
+  });
+});
+
+// ── the matrix arrives assembled ──────────────────────────────────────────
+//
+// getMatrix used to return `cells: Map<string, MatrixCell[]>` keyed by the
+// string `${criterion_id}::${rating_level_id}`, and matrix/page.tsx rebuilt
+// that template literal by hand to read it. Nothing typed the key, so a
+// mismatch was not a compile error — `?? []` rendered every miss as an
+// em-dash and a fully-populated matrix read as an empty table.
+//
+// Its own fixture: a framework needs a rating scale, criteria and requirements
+// that the browse fixture above has no use for, and a second framework with no
+// rating scale at all — which is not a hypothetical, it is what
+// masterplan-sustainability is on the dev corpus.
+describe("the matrix arrives assembled", () => {
+  const matrixDoc = `web-ts-${tag}-matrix`;
+  const gradedFramework = `web-ts-${tag}-graded`;
+  const unscaledFramework = `web-ts-${tag}-unscaled`;
+  const scaleSlug = `web-ts-${tag}-scale`;
+
+  let m: {
+    criterionA: string;
+    criterionB: string;
+    unscaledCriterion: string;
+    atLevel1: string;
+    noLevel: string;
+    rejected: string;
+    unscaledItem: string;
+  };
+
+  beforeAll(async () => {
+    m = await withAccount(TEST_ACCOUNT_ID, async (client) => {
+      const one = async (sql: string, params: unknown[] = []) =>
+        (await client.query(sql, params)).rows[0];
+
+      const scale = await one(
+        `INSERT INTO rating_scale (slug, name) VALUES ($1, 'fixture scale') RETURNING id::text`,
+        [scaleSlug],
+      );
+      await client.query(
+        `INSERT INTO rating_level (scale_id, ordinal, code, name) VALUES
+           ($1, 1, 'L1', 'first'), ($1, 2, 'L2', 'second')`,
+        [scale.id],
+      );
+
+      const doc = await one(
+        `INSERT INTO source_document (slug, title, doc_kind, sha256)
+         VALUES ($1, 'fixture crib sheet', 'crib_sheet', $2) RETURNING id::text`,
+        [matrixDoc, (randomUUID() + randomUUID()).replace(/-/g, "")],
+      );
+
+      const graded = await one(
+        `INSERT INTO framework (slug, name, rating_scale_id) VALUES ($1, 'fixture framework', $2)
+         RETURNING id::text`,
+        [gradedFramework, scale.id],
+      );
+      // No rating scale, so no levels: every requirement under it is
+      // unassigned by construction. 64 of the dev corpus's 316 requirements
+      // sit in exactly this shape.
+      const unscaled = await one(
+        `INSERT INTO framework (slug, name, rating_scale_id) VALUES ($1, 'fixture unscaled', NULL)
+         RETURNING id::text`,
+        [unscaledFramework],
+      );
+
+      const criterion = async (frameworkId: string, code: string, ordinal: number) =>
+        (
+          await one(
+            `INSERT INTO criterion (framework_id, code, title_primary, ordinal)
+             VALUES ($1, $2, $3, $4) RETURNING id::text`,
+            [frameworkId, code, `criterion ${code}`, ordinal],
+          )
+        ).id as string;
+
+      const criterionA = await criterion(graded.id, `${tag}-a`, 1);
+      const criterionB = await criterion(graded.id, `${tag}-b`, 2);
+      const unscaledCriterion = await criterion(unscaled.id, `${tag}-u`, 1);
+
+      const requirement = async (
+        statement: string,
+        criterionId: string,
+        levelOrdinal: number | null,
+        reviewStatus = "approved",
+      ) => {
+        const item = await one(
+          `INSERT INTO knowledge_item (document_id, item_type, title, statement,
+                                       content_status, review_status)
+           VALUES ($1, 'requirement', $2, $3, 'real', $4::review_status)
+           RETURNING id::text`,
+          [doc.id, statement, statement, reviewStatus],
+        );
+        await client.query(
+          `INSERT INTO requirement (knowledge_item_id, requirement_kind, criterion_id,
+                                    rating_level_id, target_text, comparator)
+           VALUES ($1, 'graded', $2,
+                   (SELECT id FROM rating_level WHERE scale_id = $3 AND ordinal = $4),
+                   $5, 'none')`,
+          [item.id, criterionId, scale.id, levelOrdinal, `${statement} target`],
+        );
+        return item.id as string;
+      };
+
+      // criterionA × L1 is populated; criterionA × L2 is deliberately empty.
+      const atLevel1 = await requirement("at level one", criterionA, 1);
+      // The bug: rating_level_id is nullable, and this row keyed
+      // `${criterionB}::null`, which no levels.map lookup ever built.
+      const noLevel = await requirement("stated without a level", criterionB, null);
+      // criterionB × L1, thrown out by a reviewer: v_retrievable_item drops it.
+      const rejected = await requirement("rejected requirement", criterionB, 1, "rejected");
+      const unscaledItem = await requirement(
+        "requirement in a framework with no scale",
+        unscaledCriterion,
+        null,
+      );
+
+      return { criterionA, criterionB, unscaledCriterion, atLevel1, noLevel, rejected, unscaledItem };
+    });
+  });
+
+  // Unconditional deletes over tag-namespaced keys, so a half-built fixture
+  // cleans up as well as a whole one. Order is FK order, not convenience:
+  // requirement.rating_level_id has no ON DELETE, so the rating scale can only
+  // go once the document has cascaded its items and their requirements away.
+  afterAll(async () => {
+    await withAccount(TEST_ACCOUNT_ID, async (client) => {
+      await client.query(`DELETE FROM source_document WHERE slug = $1`, [matrixDoc]);
+      await client.query(`DELETE FROM framework WHERE slug = ANY($1)`, [
+        [gradedFramework, unscaledFramework],
+      ]);
+      await client.query(`DELETE FROM rating_scale WHERE slug = $1`, [scaleSlug]);
+    });
+  });
+
+  const flatten = (cells: MatrixCell[][], unassigned: MatrixCell[]) =>
+    [...cells.flat(), ...unassigned].map((c) => c.knowledge_item_id);
+
+  test("a requirement lands in its own criterion's row and its own level's column", async () => {
+    const { levels, rows } = await getMatrix(TEST_ACCOUNT_ID, gradedFramework, matrixDoc);
+    expect(levels.map((l) => l.code)).toEqual(["L1", "L2"]);
+    expect(rows.map((r) => r.criterion.id)).toEqual([m.criterionA, m.criterionB]);
+
+    const rowA = rows[0];
+    // cells[i] is levels[i] — the invariant the page relies on instead of a
+    // key. If the two ever fell out of step the page would render a
+    // requirement under the wrong band, silently, which is the failure the
+    // string key made possible.
+    expect(rowA.cells).toHaveLength(levels.length);
+    expect(rowA.cells[0].map((c) => c.knowledge_item_id)).toEqual([m.atLevel1]);
+    expect(rowA.cells[0][0].target_text).toBe("at level one target");
+  });
+
+  test("an empty intersection is an empty array, not a lookup miss", async () => {
+    // The old shape could not tell these apart: `cells.get(key) ?? []` gave
+    // the same answer for "nothing is required here" and "the key you built
+    // was wrong". Here the array exists because the query says the pair is
+    // empty.
+    const { rows } = await getMatrix(TEST_ACCOUNT_ID, gradedFramework, matrixDoc);
+    expect(rows[0].cells[1]).toEqual([]);
+    expect(rows[0].unassigned).toEqual([]);
+    // criterionB × L1 held only the rejected requirement.
+    expect(rows[1].cells[0]).toEqual([]);
+  });
+
+  test("a requirement with no rating level is visible, not dropped", async () => {
+    // rating_level_id is nullable in db/schema.sql and NULL on 68 of the dev
+    // corpus's 316 requirements. Keyed `"<uuid>::null"`, every one of them was
+    // invisible in the matrix and nothing said so.
+    const { rows, hasUnassigned } = await getMatrix(TEST_ACCOUNT_ID, gradedFramework, matrixDoc);
+    expect(hasUnassigned).toBe(true);
+    expect(rows[1].unassigned.map((c) => c.knowledge_item_id)).toEqual([m.noLevel]);
+    expect(rows[1].unassigned[0].statement).toBe("stated without a level");
+  });
+
+  test("a framework with no rating scale still shows its requirements", async () => {
+    // levels is empty, so every column the old page could draw is gone and it
+    // rendered "Nothing in this sheet" over a framework holding all of its
+    // requirements. The unassigned column is the whole table here.
+    const { levels, rows, hasUnassigned } = await getMatrix(
+      TEST_ACCOUNT_ID,
+      unscaledFramework,
+      matrixDoc,
+    );
+    expect(levels).toEqual([]);
+    expect(rows.map((r) => r.criterion.id)).toEqual([m.unscaledCriterion]);
+    expect(rows[0].cells).toEqual([]);
+    expect(hasUnassigned).toBe(true);
+    expect(rows[0].unassigned.map((c) => c.knowledge_item_id)).toEqual([m.unscaledItem]);
+  });
+
+  test("a rejected requirement is in no cell at all", async () => {
+    const { rows } = await getMatrix(TEST_ACCOUNT_ID, gradedFramework, matrixDoc);
+    const everything = rows.flatMap((r) => flatten(r.cells, r.unassigned));
+    expect(everything).not.toContain(m.rejected);
+    expect(new Set(everything)).toEqual(new Set([m.atLevel1, m.noLevel]));
+  });
+
+  test("the result survives JSON, which a Map does not", async () => {
+    // A Map serialises to {}, so the old shape could not cross a
+    // Server→Client boundary or be snapshotted. This is the assertion that
+    // fails the moment someone puts one back.
+    const matrix = await getMatrix(TEST_ACCOUNT_ID, gradedFramework, matrixDoc);
+    expect(JSON.parse(JSON.stringify(matrix))).toEqual(matrix);
+  });
+
+  test("the sheet filter reaches the rows", async () => {
+    // The other fixture's document, which has no criteria in this framework.
+    const { rows } = await getMatrix(TEST_ACCOUNT_ID, gradedFramework, slug);
+    expect(rows).toEqual([]);
+  });
+});
+
+// ── ingest jobs carry their own stages ────────────────────────────────────
+
+describe("ingest jobs carry their own stages", () => {
+  const jobFile = (n: string) => `web-ts-${tag}-${n}.pdf`;
+  let j: { withStages: string; other: string; bare: string };
+
+  beforeAll(async () => {
+    j = await withAccount(TEST_ACCOUNT_ID, async (client) => {
+      const job = async (name: string) =>
+        (
+          await client.query(
+            `INSERT INTO ingest_job (source_path, original_filename, state, lane)
+             VALUES ($1, $2, 'pages', 'fast') RETURNING id::text`,
+            [`inbox/${jobFile(name)}`, jobFile(name)],
+          )
+        ).rows[0].id as string;
+
+      const withStages = await job("a");
+      const other = await job("b");
+      const bare = await job("c");
+
+      // Written newest-first, so ordering by started_at is doing something
+      // that insertion order is not.
+      await client.query(
+        `INSERT INTO ingest_stage_run (job_id, stage, status, started_at, duration_ms) VALUES
+           ($1, 'hashed', 'ok', now() + interval '2 min', 12),
+           ($1, 'discovered', 'ok', now(), 7),
+           ($2, 'failed', 'failed', now() + interval '1 min', 3)`,
+        [withStages, other],
+      );
+
+      return { withStages, other, bare };
+    });
+  });
+
+  afterAll(async () => {
+    await withAccount(TEST_ACCOUNT_ID, async (client) => {
+      // Cascades to ingest_stage_run. Namespaced by tag, so it matches only
+      // this fixture's rows whether or not beforeAll finished.
+      await client.query(`DELETE FROM ingest_job WHERE original_filename LIKE $1`, [
+        `web-ts-${tag}-%`,
+      ]);
+    });
+  });
+
+  test("a job comes back with its own stages and nobody else's", async () => {
+    // The page used to receive two flat lists and join them with a
+    // `get ?? [] / push / set` loop, and the stage list was fetched whole —
+    // no WHERE, no LIMIT — while the jobs stopped at 200.
+    const { jobs } = await listIngestJobs(TEST_ACCOUNT_ID);
+    const mine = jobs.find((job) => job.id === j.withStages);
+    expect(mine).toBeDefined();
+    expect(mine?.stages.map((s) => s.stage)).toEqual(["discovered", "hashed"]);
+    expect(mine?.stages.map((s) => s.duration_ms)).toEqual([7, 12]);
+
+    const other = jobs.find((job) => job.id === j.other);
+    expect(other?.stages.map((s) => s.stage)).toEqual(["failed"]);
+    expect(other?.stages[0].status).toBe("failed");
+  });
+
+  test("a job with no stages carries an empty array", async () => {
+    // json_agg over no rows is NULL, and a NULL here would be `.length` of
+    // undefined on the page. coalesce to '[]' is the reason it is not.
+    const { jobs } = await listIngestJobs(TEST_ACCOUNT_ID);
+    expect(jobs.find((job) => job.id === j.bare)?.stages).toEqual([]);
+  });
+
+  test("jobs stay newest-first", async () => {
+    const { jobs } = await listIngestJobs(TEST_ACCOUNT_ID);
+    const mine = jobs.filter((job) => job.original_filename.startsWith(`web-ts-${tag}-`));
+    expect(mine).toHaveLength(3);
+    const updated = mine.map((job) => job.updated_at);
+    expect([...updated].sort().reverse()).toEqual(updated);
   });
 });

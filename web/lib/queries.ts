@@ -839,18 +839,42 @@ export async function getMatrixDocuments(
   );
 }
 
+export type MatrixRow = {
+  criterion: MatrixCriterion;
+  // cells[i] holds the requirements sitting at levels[i]: same length, same
+  // order, always present. The page indexes it; it does not rebuild a key.
+  cells: MatrixCell[][];
+  // requirement.rating_level_id is nullable, and a requirement can also point
+  // at a level belonging to another scale. Both used to be dropped on the
+  // floor — the old Map was keyed `${criterion}::${level}` and "…::null" is a
+  // key nothing ever looked up, so a whole framework without a rating scale
+  // (masterplan-sustainability: 64 of 64 requirements) rendered as an empty
+  // sheet. They are collected here instead, and the page gives them a column.
+  unassigned: MatrixCell[];
+};
+
+export type Matrix = {
+  levels: MatrixLevel[];
+  rows: MatrixRow[];
+  // Whether any row has unassigned requirements — the one place that decides
+  // the extra column exists, so the header and the body cannot disagree.
+  hasUnassigned: boolean;
+};
+
+type MatrixCellRow = MatrixCell & { criterion_id: string; rating_level_id: string | null };
+
 export async function getMatrix(
   accountId: string,
   frameworkSlug: string,
   documentSlug?: string,
-): Promise<{ levels: MatrixLevel[]; criteria: MatrixCriterion[]; cells: Map<string, MatrixCell[]> }> {
+): Promise<Matrix> {
   return withAccount(accountId, async (client) => {
     const fw = await client.query(
       `SELECT id, rating_scale_id FROM framework WHERE slug = $1`,
       [frameworkSlug],
     );
     const framework = fw.rows[0];
-    if (!framework) return { levels: [], criteria: [], cells: new Map() };
+    if (!framework) return { levels: [], rows: [], hasUnassigned: false };
 
     const levels = await client.query<MatrixLevel>(
       `SELECT id, ordinal, code, name FROM rating_level WHERE scale_id = $1 ORDER BY ordinal`,
@@ -889,7 +913,7 @@ export async function getMatrix(
     // and drops rejected requirements, so a cell a reviewer has thrown out
     // stops being rendered as something the framework requires. The document
     // join and the citation LATERAL it replaces were that view, by hand.
-    const cellsRes = await client.query(
+    const cellsRes = await client.query<MatrixCellRow>(
       `
       SELECT r.criterion_id::text AS criterion_id, r.rating_level_id::text AS rating_level_id,
              ki.id::text AS knowledge_item_id, ki.statement,
@@ -902,22 +926,46 @@ export async function getMatrix(
       JOIN criterion c ON c.id = r.criterion_id
       LEFT JOIN unit u ON u.id = r.unit_id
       WHERE c.framework_id = $1 ${cellDocFilter}
+      -- Deterministic within a cell, so the assembled result can be compared
+      -- or snapshotted. Unordered, two runs put the same requirements in a
+      -- different order for no reason a reader could explain.
+      ORDER BY ki.page_index NULLS LAST, ki.id
       `,
       cellsParams,
     );
 
-    const cells = new Map<string, MatrixCell[]>();
+    // The pivot happens here, once, behind the interface. It used to happen
+    // half here and half in matrix/page.tsx, joined by a `${criterion}::${level}`
+    // string convention no type described: get the template literal wrong and
+    // every lookup missed, `?? []` turned each miss into an em-dash, and a
+    // fully-populated matrix rendered as an empty table with no error anywhere.
+    const rowAt = new Map(criteria.rows.map((c, i) => [c.id, i] as const));
+    const levelAt = new Map(levels.rows.map((l, i) => [l.id, i] as const));
+    const rows: MatrixRow[] = criteria.rows.map((criterion) => ({
+      criterion,
+      // Every intersection exists as an empty array. A criterion/level pair
+      // with no requirements is a fact the query knows, not a lookup miss the
+      // caller has to guess the meaning of.
+      cells: levels.rows.map(() => []),
+      unassigned: [],
+    }));
+
     for (const row of cellsRes.rows) {
-      const key = `${row.criterion_id}::${row.rating_level_id}`;
-      const { criterion_id, rating_level_id, ...rest } = row;
-      void criterion_id;
-      void rating_level_id;
-      const list = cells.get(key) ?? [];
-      list.push(rest as MatrixCell);
-      cells.set(key, list);
+      const { criterion_id, rating_level_id, ...cell } = row;
+      const r = rowAt.get(criterion_id);
+      // Only when the sheet filter narrowed the criteria but not the cells;
+      // both carry the same filter, so this is belt and braces.
+      if (r === undefined) continue;
+      const l = rating_level_id === null ? undefined : levelAt.get(rating_level_id);
+      if (l === undefined) rows[r].unassigned.push(cell);
+      else rows[r].cells[l].push(cell);
     }
 
-    return { levels: levels.rows, criteria: criteria.rows, cells };
+    return {
+      levels: levels.rows,
+      rows,
+      hasUnassigned: rows.some((r) => r.unassigned.length > 0),
+    };
   });
 }
 
@@ -938,8 +986,9 @@ export type IngestJob = {
   updated_at: string;
 };
 
+// No job_id: a stage arrives inside the job it belongs to, so the column that
+// existed only to join the two flat lists back together has nothing left to do.
 export type IngestStageRun = {
-  job_id: string;
   stage: string;
   status: string;
   started_at: string;
@@ -948,31 +997,52 @@ export type IngestStageRun = {
   error: string | null;
 };
 
+export type IngestJobWithStages = IngestJob & { stages: IngestStageRun[] };
+
 export async function listIngestJobs(
   accountId: string,
-): Promise<{ jobs: IngestJob[]; stages: IngestStageRun[] }> {
+): Promise<{ jobs: IngestJobWithStages[] }> {
   return withAccount(accountId, async (client) => {
-    const jobs = await client.query<IngestJob>(
+    // One query, grouped where the rows are. The second query used to read
+    // ingest_stage_run whole — no WHERE, no LIMIT, no join — while the jobs
+    // above it stopped at 200, so every stage of every job past the limit was
+    // fetched and then dropped by a `get ?? [] / push / set` loop in the page.
+    // The LATERAL is scoped to the 200 jobs actually returned.
+    const jobs = await client.query<IngestJobWithStages>(
       `
-      SELECT id::text, source_path, original_filename, state::text AS state, lane::text AS lane,
-             doc_kind_guess::text AS doc_kind_guess, classification_confidence,
-             document_id::text AS document_id, attempts, last_error,
-             discovered_at::text AS discovered_at, updated_at::text AS updated_at
-      FROM ingest_job
-      ORDER BY updated_at DESC
-      LIMIT 200
+      WITH j AS (
+        SELECT id, source_path, original_filename, state, lane,
+               doc_kind_guess, classification_confidence,
+               document_id, attempts, last_error, discovered_at, updated_at
+        FROM ingest_job
+        ORDER BY updated_at DESC
+        LIMIT 200
+      )
+      SELECT j.id::text, j.source_path, j.original_filename,
+             j.state::text AS state, j.lane::text AS lane,
+             j.doc_kind_guess::text AS doc_kind_guess, j.classification_confidence,
+             j.document_id::text AS document_id, j.attempts, j.last_error,
+             j.discovered_at::text AS discovered_at, j.updated_at::text AS updated_at,
+             coalesce(s.stages, '[]'::json) AS stages
+      FROM j
+      LEFT JOIN LATERAL (
+        SELECT json_agg(
+                 json_build_object(
+                   'stage', r.stage::text,
+                   'status', r.status::text,
+                   'started_at', r.started_at::text,
+                   'finished_at', r.finished_at::text,
+                   'duration_ms', r.duration_ms,
+                   'error', r.error
+                 ) ORDER BY r.started_at
+               ) AS stages
+        FROM ingest_stage_run r
+        WHERE r.job_id = j.id
+      ) s ON true
+      ORDER BY j.updated_at DESC
       `,
     );
-    const stages = await client.query<IngestStageRun>(
-      `
-      SELECT job_id::text, stage::text AS stage, status::text AS status,
-             started_at::text AS started_at, finished_at::text AS finished_at,
-             duration_ms, error
-      FROM ingest_stage_run
-      ORDER BY started_at
-      `,
-    );
-    return { jobs: jobs.rows, stages: stages.rows };
+    return { jobs: jobs.rows };
   });
 }
 
