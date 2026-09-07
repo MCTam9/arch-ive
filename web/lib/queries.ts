@@ -48,18 +48,19 @@ export async function getFacetOptions(accountId: string): Promise<FacetOptions> 
   return withAccount(accountId, async (client) => {
     const { rows } = await client.query<{ facets: FacetOptions }>(`
       WITH terms AS (
-        -- Subtree counts, not direct ones. Topic is an ltree hierarchy, and
-        -- selecting a parent filters by the whole subtree (see the topic
-        -- clause in listKnowledgeItems), so a direct count on a parent
-        -- promises 17 and delivers 53. Scale and level are flat, where a
-        -- subtree is just the term itself, so one expression serves all three.
-        SELECT tt.taxonomy_id, tt.id, tt.label, tt.path, tt.ordinal,
-               (SELECT count(DISTINCT it.knowledge_item_id)::int
-                  FROM item_term it
-                  JOIN taxonomy_term d ON d.id = it.term_id
-                 WHERE d.path <@ tt.path) AS n
-          FROM taxonomy_term tt
-         WHERE tt.taxonomy_id IN ('topic', 'scale', 'level')
+        -- Subtree counts, from v_term_item_count (db/schema.sql). Topic is an
+        -- ltree hierarchy and selecting a parent filters by the whole subtree,
+        -- so a direct count on a parent promises 17 and delivers 53. The
+        -- correlated subquery that said so was written out here, again in
+        -- getHomeSummary, and a third time as the filter in
+        -- listKnowledgeItems -- three copies that had to be kept in step by
+        -- hand. The view is built from the same subtree join the filter now
+        -- calls, so the advertised count and the result cannot disagree, and
+        -- it excludes rejected items for the same reason browse does.
+        SELECT taxonomy_id, term_id AS id, label, path, ordinal,
+               item_count AS n
+          FROM v_term_item_count
+         WHERE taxonomy_id IN ('topic', 'scale', 'level')
       ), docs AS (
         SELECT sd.slug, sd.title, sd.doc_kind::text AS doc_kind,
                count(ki.id)::int AS n
@@ -111,13 +112,13 @@ export async function getHomeSummary(accountId: string): Promise<HomeSummary> {
   return withAccount(accountId, async (client) => {
     const { rows } = await client.query<{ summary: HomeSummary }>(`
       WITH tops AS (
-        SELECT tt.id, tt.label, tt.ordinal, tt.path,
-               (SELECT count(DISTINCT it.knowledge_item_id)::int
-                  FROM item_term it
-                  JOIN taxonomy_term d ON d.id = it.term_id
-                 WHERE d.path <@ tt.path) AS n
-          FROM taxonomy_term tt
-         WHERE tt.taxonomy_id = 'topic' AND tt.parent_id IS NULL
+        -- The same subtree counts the browse facets show, out of the same
+        -- view. A tile here is a browse URL, so the number on the tile and
+        -- the number the filter returns have to be one number, not two
+        -- expressions that agree today.
+        SELECT term_id AS id, label, ordinal, path, item_count AS n
+          FROM v_term_item_count
+         WHERE taxonomy_id = 'topic' AND parent_id IS NULL
       )
       SELECT json_build_object(
         'topics', coalesce((
@@ -245,8 +246,15 @@ export type BrowseItem = {
   title: string | null;
   statement: string | null;
   summary: string | null;
+  /** The status to stamp the card with: the chunk's own placeholder status
+   *  when it has one, otherwise the item's. A figure description on a page
+   *  marked 'wip' is work in progress even though its own column says 'real'. */
   content_status: string;
   review_status: string;
+  /** Whether anything about this result is lorem/template/wip/draft. Browse
+   *  labels placeholder content rather than hiding it -- only `rejected` is
+   *  excluded, and the view does that. */
+  is_placeholder?: boolean;
   document_slug: string;
   document_title: string | null;
   doc_kind: string;
@@ -293,6 +301,15 @@ export const BROWSE_PAGE_SIZE = 25;
  *  not be found by searching for the numbers in it. The unfiltered list is
  *  still items only: it is a catalogue of what was extracted, and the facet
  *  counts beside it describe exactly that.
+ *
+ *  Both paths read a retrieval-policy view rather than the base tables, so
+ *  what a reader may be shown is decided once, in db/schema.sql, where
+ *  tools/search.py and tools/mcp_server.py read the same answer. What that
+ *  buys here: rejected items are gone from browse and from search, and the
+ *  page-text floor is enforced without this file restating it. What it
+ *  deliberately does not do is hide placeholder content -- the web shows it
+ *  with its status stamped on the card, which is the only way a reviewer
+ *  finds it. MCP takes the opposite default from the same columns.
  */
 export async function listKnowledgeItems(
   accountId: string,
@@ -309,18 +326,6 @@ export async function listKnowledgeItems(
       conditions.push(sql.replace("?", `$${params.length}`));
     };
 
-    // A term matches its whole subtree. `term_id = ?` was exact, so choosing
-    // a top-level topic returned only the items tagged on the parent itself --
-    // "Health & Wellbeing" gave 17 of its 53. The taxonomy is an ltree with a
-    // GiST index on `path` (db/schema.sql), so `<@` is both correct and cheap.
-    // Scale and level are flat: their subtree is the term, and the clause is
-    // identical, which is why there is one of it.
-    const TERM_SUBTREE = `EXISTS (
-      SELECT 1 FROM item_term it
-        JOIN taxonomy_term tt ON tt.id = it.term_id
-       WHERE it.knowledge_item_id = ki.id
-         AND tt.path <@ (SELECT path FROM taxonomy_term WHERE id = ?))`;
-
     // Document is the only filter that means anything for all three kinds --
     // every chunk has a document_id. The other four hang off knowledge_item
     // and item_term, and a page or figure chunk cannot satisfy them or fail
@@ -333,11 +338,28 @@ export async function listKnowledgeItems(
       itemOnly.push(sql.replace("?", `$${params.length}`));
     };
 
-    if (filters.documentSlug) push("d.slug = ?", filters.documentSlug);
-    if (filters.itemType) pushItemOnly("ki.item_type = ?::item_type", filters.itemType);
-    if (filters.topicId) pushItemOnly(TERM_SUBTREE, filters.topicId);
-    if (filters.scaleId) pushItemOnly(TERM_SUBTREE, filters.scaleId);
-    if (filters.levelId) pushItemOnly(TERM_SUBTREE, filters.levelId);
+    // Unqualified column names, on purpose: v_retrievable_item and
+    // v_retrievable_chunk both expose `document_slug`, `item_type` and
+    // `knowledge_item_id`, so one predicate string is valid against the
+    // unranked path and the ranked one alike -- which is the same reason
+    // tools/search.py takes its item column as a parameter.
+    if (filters.documentSlug) push("document_slug = ?", filters.documentSlug);
+    // coalesce is load-bearing. A page or figure chunk has no item_type, so
+    // the bare comparison is NULL for it, `NOT ok` on a NULL is NULL, and the
+    // `suppressed` CTE never counted it: filtering browse by item type hid
+    // every page and figure match *and* reported `suppressed: 0` -- the one
+    // count whose whole job is to explain that disappearance. item_has_term()
+    // is deliberately non-strict for the same reason (db/schema.sql).
+    if (filters.itemType)
+      pushItemOnly("coalesce(item_type = ?::item_type, false)", filters.itemType);
+    // A term matches its whole ltree subtree -- choosing a top-level topic
+    // used to return only the items tagged on the parent itself, 17 of 53.
+    // That rule is written once now, in item_has_term(); tools/search.py calls
+    // the same function. The hand-copied EXISTS that used to sit here drifted
+    // from the Python one twice (fdd3448, then 115e851 fixing it again here).
+    if (filters.topicId) pushItemOnly("item_has_term(knowledge_item_id, ?)", filters.topicId);
+    if (filters.scaleId) pushItemOnly("item_has_term(knowledge_item_id, ?)", filters.scaleId);
+    if (filters.levelId) pushItemOnly("item_has_term(knowledge_item_id, ?)", filters.levelId);
 
     // The unranked path lists items and nothing else, so there the two sets
     // are simply concatenated -- no kind can be suppressed from a list that
@@ -345,31 +367,25 @@ export async function listKnowledgeItems(
     const allConditions = [...conditions, ...itemOnly];
     const where = allConditions.length ? `WHERE ${allConditions.join(" AND ")}` : "";
 
-    // Shared tail: the columns every row needs, plus the pre-LIMIT total, so
-    // the header count and the page come back in one statement.
-    const SELECT_COLUMNS = `
-      ki.id, ki.item_type::text AS item_type, ki.title, ki.statement, ki.summary,
-      ki.content_status::text AS content_status, ki.review_status::text AS review_status,
-      d.slug AS document_slug, d.title AS document_title, d.doc_kind::text AS doc_kind,
-      c.page_index, c.printed_page_label`;
-    const CITATION_JOIN = `
-      LEFT JOIN LATERAL (
-        SELECT page_index, printed_page_label FROM citation
-        WHERE citation.knowledge_item_id = ki.id
-        ORDER BY page_index NULLS LAST LIMIT 1
-      ) c ON true`;
-
     if (!filters.q) {
       params.push(limit, offset);
+      // v_retrievable_item, not knowledge_item: the view already excludes
+      // rejected rows and carries the document columns and the item's first
+      // citation (one LATERAL ... LIMIT 1, so a four-page item is still one
+      // row). The document join and the citation LATERAL that stood here were
+      // that view, restated.
       const { rows } = await client.query(
-        `SELECT ${SELECT_COLUMNS}, 'item'::text AS kind,
+        `SELECT id, item_type::text AS item_type, title, statement, summary,
+                content_status::text AS content_status,
+                review_status::text AS review_status,
+                document_slug, document_title, doc_kind::text AS doc_kind,
+                page_index, printed_page_label,
+                'item'::text AS kind, is_placeholder,
                 NULL::float8 AS score, NULL::text AS snippet,
                 count(*) OVER ()::int AS total
-           FROM knowledge_item ki
-           JOIN source_document d ON d.id = ki.document_id
-           ${CITATION_JOIN}
+           FROM v_retrievable_item
            ${where}
-          ORDER BY d.slug, ki.item_type, ki.title NULLS LAST
+          ORDER BY document_slug, item_type, title NULLS LAST
           LIMIT $${params.length - 1} OFFSET $${params.length}`,
         params,
       );
@@ -388,37 +404,40 @@ export async function listKnowledgeItems(
     const limitP = `$${params.length - 1}`;
     const offsetP = `$${params.length}`;
 
-    // A page chunk is a whole page of raw text, and one of them is three
-    // characters long. Item and figure chunks are composed, so the floor is
-    // page-only: a blanket one would delete 180 short item chunks from search,
-    // and they are perfectly good answers.
-    const PAGE_TEXT_FLOOR =
-      "(ch.knowledge_item_id IS NOT NULL OR ch.asset_id IS NOT NULL OR length(ch.text) >= 40)";
-    const baseWhere = `WHERE ${[...conditions, PAGE_TEXT_FLOOR].join(" AND ")}`;
+    // Only the document predicate narrows the base set; the item-only ones
+    // ride along as `ok` so what they hide can still be counted. The
+    // page-text floor used to be ANDed in here, which meant this list was
+    // never empty -- it is now, whenever no document is chosen, so a bare
+    // `WHERE` is a syntax error waiting to happen.
+    const baseWhere = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const itemOk = itemOnly.length ? `(${itemOnly.join(" AND ")})` : "true";
 
     const { rows } = await client.query(
       `
       WITH base AS (
-        SELECT ch.id AS chunk_id, ch.tsv, ch.text, ch.document_id, ch.page_from,
-               ki.id AS item_id, ch.asset_id,
+        SELECT c.chunk_id, c.tsv, c.text, c.document_id, c.page_from,
+               c.knowledge_item_id AS item_id, c.asset_id,
                -- What counts as one result. An item groups all of its chunks;
                -- a figure is its own; a page groups the windows it was split
                -- into, so a long page returns once, scored by its best window,
                -- instead of flooding the list with its own fragments.
                -- Grouping used to be on item_id alone, which gave a chunk with
                -- no item nowhere to live -- not filtered out, simply keyless.
-               coalesce(ki.id::text, ch.asset_id::text,
-                        ch.document_id::text || ':' || ch.page_from) AS result_id,
-               CASE WHEN ki.id IS NOT NULL      THEN 'item'
-                    WHEN ch.asset_id IS NOT NULL THEN 'figure'
-                    ELSE 'page' END AS kind,
+               coalesce(c.knowledge_item_id::text, c.asset_id::text,
+                        c.document_id::text || ':' || c.page_from) AS result_id,
+               -- The view's own verdict, not a CASE rebuilt here. Same three
+               -- kinds MCP names.
+               c.result_kind AS kind,
+               -- Carried, not filtered on. The web SHOWS placeholder content
+               -- with its status stamped on the card -- that is what makes a
+               -- reviewer able to find it. Only 'rejected' is excluded, and
+               -- v_retrievable_chunk has already done that, along with the
+               -- page-text floor.
+               c.is_placeholder, c.placeholder_status,
                -- Non-items can never satisfy an item-only facet. Carried as a
                -- flag rather than a WHERE so the ones it hides can be counted.
                ${itemOk} AS ok
-          FROM chunk ch
-          LEFT JOIN knowledge_item ki ON ki.id = ch.knowledge_item_id
-          JOIN source_document d ON d.id = ch.document_id
+          FROM v_retrievable_chunk c
          ${baseWhere}
       ),
       -- OR-of-lexemes, built in SQL so there is no client-side tokenising to
@@ -453,6 +472,14 @@ export async function listKnowledgeItems(
       per_result AS (
         SELECT result_id, item_id, asset_id, kind, document_id, ok,
                max(rank) AS score,
+               -- Aggregates, never GROUP BY keys. Chunk-level status varies
+               -- within one item -- a figure description sitting on a WIP page
+               -- is a placeholder, the item text beside it is not -- and
+               -- grouping on the status would split that one item into two
+               -- result rows, each with half its chunks.
+               bool_or(is_placeholder) AS is_placeholder,
+               (array_agg(placeholder_status)
+                  FILTER (WHERE placeholder_status IS NOT NULL))[1] AS placeholder_status,
                (array_agg(text      ORDER BY rank DESC))[1] AS best_text,
                (array_agg(page_from ORDER BY rank DESC))[1] AS page_from
           FROM hits
@@ -481,12 +508,19 @@ export async function listKnowledgeItems(
              -- must not borrow one, so it shows what it is instead.
              coalesce(ki.item_type::text, pg.kind) AS item_type,
              ki.title, ki.statement, ki.summary,
-             coalesce(ki.content_status::text, 'real') AS content_status,
+             -- The chunk's verdict first, the item's column second. 141 figure
+             -- chunks carry content_status 'real' while sitting on a page
+             -- marked 'wip', and reading the item's column alone renders a
+             -- description of unfinished work as finished fact. The card is
+             -- stamped, not withheld -- see the base CTE.
+             coalesce(pg.placeholder_status::text, ki.content_status::text, 'real')
+               AS content_status,
              ki.review_status::text AS review_status,
+             pg.is_placeholder,
              d.slug AS document_slug, d.title AS document_title,
              d.doc_kind::text AS doc_kind,
-             coalesce(c.page_index, sp.page_index) AS page_index,
-             coalesce(c.printed_page_label, sp.printed_page_label) AS printed_page_label,
+             coalesce(ki.page_index, sp.page_index) AS page_index,
+             coalesce(ki.printed_page_label, sp.printed_page_label) AS printed_page_label,
              pg.score, pg.total, sup.n AS suppressed, kc.counts AS kind_counts,
              -- StartSel/StopSel are plain markers, split in the page. Returning
              -- HTML here would mean dangerouslySetInnerHTML on corpus text.
@@ -504,12 +538,15 @@ export async function listKnowledgeItems(
         FROM suppressed sup
         CROSS JOIN kinds kc
         LEFT JOIN page pg ON true
-        LEFT JOIN knowledge_item ki ON ki.id = pg.item_id
+        -- The browse surface, not the table: it brings the item's first
+        -- citation with it, so the citation LATERAL that used to hang off the
+        -- bottom of this statement is gone. source_document stays because a
+        -- page or figure result has no item to carry it.
+        LEFT JOIN v_retrievable_item ki ON ki.id = pg.item_id
         LEFT JOIN source_document d ON d.id = pg.document_id
         LEFT JOIN source_asset a ON a.id = pg.asset_id
         LEFT JOIN source_page sp
                ON sp.document_id = pg.document_id AND sp.page_index = pg.page_from
-        ${CITATION_JOIN}
        ORDER BY pg.score DESC, pg.result_id
       `,
       params,
@@ -616,6 +653,10 @@ export type ItemDetail = {
   scopes: { title: string; code: string | null; applies: boolean; target_text: string | null; note: string | null }[];
 };
 
+/** Reads knowledge_item, not v_retrievable_item, deliberately: this is a
+ *  direct link by id and a rejected item must still render, because the review
+ *  queue links straight to /item/[id]. MCP's get_citation reads the base table
+ *  for the same reason. */
 export async function getKnowledgeItem(
   accountId: string,
   id: string,
@@ -781,15 +822,17 @@ export async function getMatrixDocuments(
     client
       .query<DocumentOption>(
         `
-        SELECT DISTINCT d.slug, d.title, d.doc_kind::text AS doc_kind
+        -- v_retrievable_item, so a document whose only requirements for this
+        -- framework were rejected stops offering itself as a filter.
+        SELECT DISTINCT ki.document_slug AS slug, ki.document_title AS title,
+               ki.doc_kind::text AS doc_kind
         FROM framework f
         JOIN criterion c ON c.framework_id = f.id
         JOIN requirement r ON r.criterion_id = c.id
-        JOIN knowledge_item ki ON ki.id = r.knowledge_item_id
-        JOIN source_document d ON d.id = ki.document_id
+        JOIN v_retrievable_item ki ON ki.id = r.knowledge_item_id
         WHERE f.slug = $1
-        ORDER BY d.slug
-        `,
+        ORDER BY slug
+`,
         [frameworkSlug],
       )
       .then((r) => r.rows),
@@ -819,9 +862,8 @@ export async function getMatrix(
     if (documentSlug) {
       docJoin = `AND EXISTS (
         SELECT 1 FROM requirement r2
-        JOIN knowledge_item ki2 ON ki2.id = r2.knowledge_item_id
-        JOIN source_document d2 ON d2.id = ki2.document_id
-        WHERE r2.criterion_id = c.id AND d2.slug = $2
+        JOIN v_retrievable_item ki2 ON ki2.id = r2.knowledge_item_id
+        WHERE r2.criterion_id = c.id AND ki2.document_slug = $2
       )`;
       criteriaParams.push(documentSlug);
     }
@@ -840,9 +882,13 @@ export async function getMatrix(
     let cellDocFilter = "";
     if (documentSlug) {
       cellsParams.push(documentSlug);
-      cellDocFilter = `AND d.slug = $${cellsParams.length}`;
+      cellDocFilter = `AND ki.document_slug = $${cellsParams.length}`;
     }
 
+    // v_retrievable_item supplies the document columns and the first citation
+    // and drops rejected requirements, so a cell a reviewer has thrown out
+    // stops being rendered as something the framework requires. The document
+    // join and the citation LATERAL it replaces were that view, by hand.
     const cellsRes = await client.query(
       `
       SELECT r.criterion_id::text AS criterion_id, r.rating_level_id::text AS rating_level_id,
@@ -850,15 +896,11 @@ export async function getMatrix(
              r.target_text, u.symbol AS unit, r.comparator::text AS comparator,
              r.is_deliverable, ki.content_status::text AS content_status,
              ki.review_status::text AS review_status,
-             cit.page_index
+             ki.page_index
       FROM requirement r
-      JOIN knowledge_item ki ON ki.id = r.knowledge_item_id
-      JOIN source_document d ON d.id = ki.document_id
+      JOIN v_retrievable_item ki ON ki.id = r.knowledge_item_id
       JOIN criterion c ON c.id = r.criterion_id
       LEFT JOIN unit u ON u.id = r.unit_id
-      LEFT JOIN LATERAL (
-        SELECT page_index FROM citation WHERE citation.knowledge_item_id = ki.id ORDER BY page_index LIMIT 1
-      ) cit ON true
       WHERE c.framework_id = $1 ${cellDocFilter}
       `,
       cellsParams,
@@ -964,7 +1006,11 @@ export type ReviewFilter = (typeof REVIEW_STATUSES)[number];
  *
  *  Filterable by status rather than hardcoded to 'pending', because the page
  *  scan renders only here: approving an item used to remove the only place in
- *  the app where its source page could be seen. */
+ *  the app where its source page could be seen.
+ *
+ *  Reads knowledge_item, not v_retrievable_item, deliberately: this queue
+ *  filters review_status itself and must go on seeing rejected rows, which is
+ *  the one surface where they belong. */
 export async function listReviewQueue(
   accountId: string,
   opts: { document?: string; status?: ReviewFilter; limit?: number; offset?: number } = {},
