@@ -182,3 +182,69 @@ def test_square_metres_do_not_collapse_onto_metres():
 ])
 def test_page_is_real(row, expected):
     assert support.page_is_real(row) is expected
+
+
+# ── the unit token: reachable aliases, without eating a neighbour ─────────
+
+@pytest.mark.parametrize("key,expected", sorted(support.UNIT_ALIASES.items()))
+def test_every_alias_is_reachable_through_a_parse(key, expected):
+    # the token used to be letters-and-symbols only, so the five aliases
+    # holding a digit or a '.' were dead entries: 'kgCO2e/m2GIA' tokenised as
+    # 'kgCO' and lookup_unit minted 'kgco' from the stump. Parametrised over
+    # the table itself so a future alias cannot be added unreachable.
+    for text in (f"< 1 {key}", f"≥ 1 {key}", f"1 {key}"):
+        p = support.parse_value(text)
+        assert p.parsed_ok is True, text
+        assert (p.unit_id, p.unit_symbol) == expected, text
+
+
+@pytest.mark.parametrize("text,unit_id", [
+    ("< 125 kgCO2e/m2GIA", "kgco2e_m2_gia"),
+    ("<0.5 kgCO2e/kg", "kgco2e_kg"),
+    ("< 10 µg/m3", "ug_m3"),
+    ("≤ 25 mg/m3", "mg_m3"),
+    ("< 35 kWh/m2.year", "kwh_m2_yr"),
+    ("125 kgCO2e/m2GIA", "kgco2e_m2_gia"),
+    ("700-800 kgCO2e/m2GIA", "kgco2e_m2_gia"),
+])
+def test_units_with_digits_and_dots_are_not_truncated(text, unit_id):
+    p = support.parse_value(text)
+    assert p.parsed_ok is True
+    assert p.unit_id == unit_id
+    # the stumps the old token produced, which lookup_unit slugged into corpus
+    # units that do not exist
+    assert p.unit_id not in {"kgco", "g_m", "mg_m", "kwh_m", "x"}
+
+
+@pytest.mark.parametrize("text,numeric,minimum,maximum,unit_id", [
+    # a year after a value is not that value's unit: the token cannot start
+    # on a digit, so there is nothing here for it to match
+    ("700 - 800 2050", None, 700.0, 800.0, None),
+    ("< 40 2030", 40.0, None, None, None),
+    ("> 15 2050 target", 15.0, None, None, None),
+    # whitespace is outside the class, so the token stops at the space
+    ("< 30 m 2050", 30.0, None, None, "m"),
+    ("700-800ppm by 2030", None, 700.0, 800.0, "ppm"),
+    # the second bound of a range stays whole
+    ("1.5-2.5 m2", None, 1.5, 2.5, "m2"),
+    ("700-800.5 kgCO2e/m2GIA", None, 700.0, 800.5, "kgco2e_m2_gia"),
+    # a full stop ends a sentence; only a '.' inside a unit belongs to it
+    ("< 30 m.", 30.0, None, None, "m"),
+    ("< 35 kWh/m2.year.", 35.0, None, None, "kwh_m2_yr"),
+    ("40%.", 40.0, None, None, "pct"),
+    # a unit never starts with '/': matching one slugged to the junk id 'x'
+    ("≥ 3.5 / 2 of the criteria", 3.5, None, None, None),
+    # no unit stated at all
+    ("≤ 35", 35.0, None, None, None),
+])
+def test_the_unit_token_cannot_eat_a_neighbouring_number(text, numeric, minimum,
+                                                          maximum, unit_id):
+    p = support.parse_value(text)
+    assert p.parsed_ok is True
+    assert (p.numeric, p.minimum, p.maximum) == (numeric, minimum, maximum)
+    assert p.unit_id == unit_id
+
+
+def test_a_percentage_target_keeps_its_year_out_of_the_unit():
+    p = support.parse_value("40 % by 2030")
+    assert (p.numeric, p.unit_id, p.comparator) == (40.0, "pct", "none")

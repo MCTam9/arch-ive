@@ -49,12 +49,38 @@ UNIT_ALIASES: dict[str, tuple[str, str]] = {
     "kgco2e/m2gia": ("kgco2e_m2_gia", "kgCO2e/m2GIA"),
 }
 
-_UNIT_TOKEN = r"[%a-zA-Zµ°/²·]*"
+# Five of the aliases above contain a digit or a '.' ('kgCO2e/m2GIA',
+# 'kgCO2e/kg', 'µg/m3', 'mg/m3', 'kWh/m2.year'), so a unit token made only of
+# letters and symbols truncated them ('kgCO' ...) and lookup_unit's slug
+# fallback minted a junk unit id for the stump. The token therefore has to
+# admit digits and '.', and every pattern below places it directly after a
+# number -- so the whole difficulty is admitting them without letting the unit
+# start on, or reach into, a neighbouring number:
+#   - the FIRST character is never a digit and never '.'. A unit is
+#     'kgCO2e/m2GIA', never '2050' and never '.5', so '700 - 800 2050' still
+#     parses as a bare range and '< 40 2030' cannot read the year as a unit.
+#     It is also what stops a range's second bound being eaten: the token can
+#     only begin where NUM has already stopped, and NUM is greedy.
+#   - whitespace is outside both classes, so a token ends at the space:
+#     '30 m 2050' yields 'm', not 'm 2050'. No \b needed -- the class is the
+#     boundary.
+#   - '.' is consumed only when a unit-initial character follows it, which
+#     keeps the '.year' of 'kWh/m2.year' while leaving a sentence-final stop
+#     ('40%.', '< 30 m.') and any decimal point outside the unit.
+# '/' is admitted after the first character only: a leading '/' is not a unit,
+# and letting it match would slug to 'x' and mint that as a unit id.
+_UNIT_HEAD = r"[%a-zA-Zµ°²·]"
+_UNIT_TAIL = r"[%a-zA-Z0-9µ°²·/]"
+_UNIT_CORE = rf"{_UNIT_HEAD}(?:{_UNIT_TAIL}|\.(?={_UNIT_HEAD}))*"
+# optional, because a comparator or range often states no unit at all ('≤ 35')
+_UNIT_TOKEN = rf"(?:{_UNIT_CORE})?"
 _RANGE_RE = re.compile(rf"({NUM})\s*-\s*({NUM})\s*({_UNIT_TOKEN})")
 _LTE_RE = re.compile(rf"[<≤]\s*({NUM})\s*({_UNIT_TOKEN})")
 _GTE_RE = re.compile(rf"[>≥]\s*({NUM})\s*({_UNIT_TOKEN})")
 _PCT_RE = re.compile(rf"({NUM})\s*%")
-_NUM_UNIT_RE = re.compile(rf"({NUM})\s*([a-zA-Zµ°/²·]+)")
+# same token, but required: this one is fullmatched against the whole cell, so
+# an empty unit here would just duplicate _BARE_NUM_RE.
+_NUM_UNIT_RE = re.compile(rf"({NUM})\s*({_UNIT_CORE})")
 _BARE_NUM_RE = re.compile(NUM)
 _PARENTHESISED_UNIT_RE = re.compile(r"\((%|m|km|m2|m²|dB|dBA)\)")
 _PLACEHOLDER_RE = re.compile(r"^X\s*(%|km|no)", re.I)
