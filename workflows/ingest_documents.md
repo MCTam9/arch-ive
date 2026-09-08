@@ -328,6 +328,78 @@ worst failure mode available here because the row survives, empty.
   now spares `asset_id IS NOT NULL`, because figure chunks are not that
   stage's to delete.
 
+## Re-extracting documents already in the corpus
+
+Extraction improvements land at **write time** — `parse_value` recovering a
+range or a percentage target, `is_placeholder` applied at every benchmark site,
+`printed_page_label` and `bbox` composed onto a citation by
+`tools/write_extraction.py`. None of it reaches a document that was written
+before the change, and nothing re-reads old rows on its own. Reach for
+`tools/reextract.py` when an extractor or the writer has improved and the
+corpus should have the benefit:
+
+```sh
+python3 -m tools.reextract --status                        # what the corpus holds now
+python3 -m tools.reextract                                 # dry run, per document
+python3 -m tools.reextract --document crib-water --yes     # one document
+python3 -m tools.reextract --yes                           # the corpus pass
+```
+
+`--status` is the "is this worth running" view: items and citations per
+document, how many of those citations carry a printed page label or a bbox,
+how many requirements hold a numeric `target_text` that did not parse, and
+whether the original is on local disk at all.
+
+**It rewrites knowledge items in place.** Per document it rebuilds the
+`DocumentContext` the `extracted` stage builds, calls the registered extractor,
+and hands the result to `write_extraction` — which clears that document's prior
+`knowledge_item` rows first. So this is not additive: the items, their subtype
+rows, their citations and their chunks are new rows with new ids.
+
+**Enrichment and embedding follow automatically, and that is the point.** The
+cascade from `knowledge_item` takes `item_term`, `item_stage`, citations and
+item chunks with it, so a re-extract that stopped at the writer would leave a
+document untagged, unlinked and unembedded — worse off than before it ran.
+Each document therefore gets `pipeline.ENRICHMENTS` in order and then
+`embed_chunks.embed_pending`, the same `extracted → enriched → embedded`
+sequence a fresh ingest runs. Pass `--no-embed` to defer the last step, and run
+`python3 -m tools.embed_chunks` yourself afterwards.
+
+Two things it cannot rebuild, and both are reasons to read the dry run first:
+
+- **Human review decisions.** `review_status` and `reviewed_by` are columns on
+  the rows being deleted; every item comes back `pending`. The plan says how
+  many decisions each document would reset.
+- **Reference resolution.** `external_reference` rows are rewritten
+  unresolved — finish with `python3 -m tools.resolve_references --yes`.
+
+What survives untouched: `source_page`, `source_asset` and page renders (this
+never runs the `pages` stage), `doc_node` (the writer upserts on `code`), the
+lookup tables, and **figure chunks** — they hang off `source_asset`, not
+`knowledge_item`, and are not this stage's to delete.
+
+Three safety properties, because this rewrites the corpus:
+
+- **Dry run by default**, `--yes` to write, exactly like `chunk_pages`.
+- **One transaction per document**, committed before the next starts. A
+  failure part-way through leaves the other thirteen documents as they were,
+  and the failed one rolled back to what it held.
+- **An extractor returning zero items for a document that currently has some
+  is refused**, per document, unless `--allow-empty` says otherwise. That is
+  the failure mode that quietly empties a document while leaving it looking
+  ingested.
+
+Every document is reported with its before and after counts — items,
+citations, chunks, facet tags, stage links — so a run that loses content says
+so while you are watching it rather than a week later.
+
+**The original file has to be on local disk.** It is looked up as
+`SOURCE_DIR/<slug>/<sha256>.<ext>` and then `.tmp/restored/`; a document with
+neither is skipped by name, with the rest of the run continuing.
+`tools/reextract.py` never pulls from R2 — a restore decrypts an archived
+original and writes the `audit_log` row that says a document left the archive,
+which stays a deliberate act with `tools/fetch_original.py` behind it.
+
 ## Edge cases and what to do
 
 - **A large file is picked up mid-copy.** Should not happen: a file is only
