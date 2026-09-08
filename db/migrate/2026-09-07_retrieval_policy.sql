@@ -1,8 +1,8 @@
 -- Retrieval policy moves into SQL.
 --
--- Applied to: local dev, arch_test. NOT applied to Neon — that changes
--- production and needs an explicit human go-ahead. See
--- workflows/provision_database.md.
+-- Applied to: local dev, arch_test, Neon (2026-09-08, on the direct endpoint
+-- with -pooler stripped — the pooled one cannot carry DDL). Re-applied to each
+-- to prove it is idempotent. See workflows/provision_database.md.
 --
 -- Five rules that decide what a reader may be shown were written by hand in
 -- tools/search.py, tools/mcp_server.py and web/lib/queries.ts — two to four

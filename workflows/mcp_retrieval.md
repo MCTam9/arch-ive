@@ -14,9 +14,9 @@ every row (a row with neither is dropped before it's returned):
 
 | Tool | Backed by | Notes |
 |---|---|---|
-| `search_knowledge(query, facets?, limit?, include_placeholder?)` | `chunk.tsv` + hybrid rank (reuses `tools/search.py`) | full-text always, vector cosine fused in when embeddings exist |
+| `search_knowledge(query, facets?, limit?, include_placeholder?)` | `v_retrievable_chunk` + hybrid rank (one call into `tools/search.py`) | full-text always, vector cosine fused in when embeddings exist |
 | `get_benchmark(metric?, building_use?, target_year?, limit?, include_placeholder?)` | `v_benchmark` | |
-| `get_requirement_matrix(topic?, level?, framework?, limit?, include_placeholder?)` | `v_requirement_matrix` | column-defensive: another agent is adding a scope dimension to this view concurrently |
+| `get_requirement_matrix(topic?, level?, framework?, limit?, include_placeholder?)` | `v_requirement_matrix` | column-defensive: selects a named allowlist, degrades rather than raising |
 | `list_templates(limit?, include_placeholder?)` | `v_template_catalogue` | calculators are xlsx, not paginated PDFs -- citation here is `{document_slug, sheets}` |
 | `get_citation(item_id)` | `citation` | every citation row for one `knowledge_item_id` |
 | `get_document(slug)` | `source_document` + `doc_node` | outline, plus a `content_status` breakdown of the document's knowledge items |
@@ -27,6 +27,19 @@ every row (a row with neither is dropped before it's returned):
 (`is_placeholder` / `is_placeholder_content`). This exists because one
 document in this corpus is ~24% lorem/WIP filler -- an agent that can't tell
 the difference will cite fake numbers as real ones.
+
+**Where that rule lives.** In `db/schema.sql`, not here.
+`is_placeholder_status()` holds the four status values and
+`v_retrievable_chunk` exposes `is_placeholder` and `has_citation` as columns,
+so this server, `tools/search.py` and the web app read one rule rather than
+keeping three copies of it in step. `search_knowledge` is now a single call
+into `tools.search.search` with `include_placeholder` passed through; the
+separate hand-written query that used to serve the `include_placeholder=true`
+case is gone, having quietly drifted from the default path it was supposed to
+mirror. The same views also drop `review_status = 'rejected'` — a human
+rejected that extraction, so it should not come back as an answer — while
+`get_citation` still returns rejected and placeholder rows, labelled, because
+the caller already has a specific `item_id` in hand.
 
 ## Required inputs
 
@@ -83,19 +96,34 @@ to prove the default-exclude / explicit-include-and-label behaviour.
   `list_templates` treats `document_slug` (always present, 1:1 with the
   file) plus the sheet names from `template_parameter` as the citation for
   that shape of document.
-- **Placeholder pages don't reach `chunk`/`knowledge_item` at all, in the
-  corpus as ingested today.** For `typology-multifamily`, the ~24%
-  lorem/WIP pages are flagged at `source_page.content_status`, and the
-  extraction pipeline simply never produced chunks or knowledge items citing
-  those pages -- so the `content_status` filtering in this server is a
-  backstop for content that *is* flagged at the chunk/item level (which the
-  schema and `CONTRACT.md` both anticipate), not the only thing standing
-  between an agent and that document's placeholder text today. If a future
-  ingest run ever does propagate a page-level flag down to a chunk or
-  knowledge item, this server already excludes it by default.
-- **`v_requirement_matrix` is being changed concurrently.** `get_requirement_matrix`
-  never does `SELECT *` against it -- it selects a fixed, named column
-  allowlist, intersected at query time with `information_schema.columns`,
-  and reports anything missing under `missing_columns` in the response
-  instead of raising. If `document_slug` or `page_index` themselves go
-  missing, the tool refuses to return uncited rows rather than guess.
+- **Placeholder pages did reach `chunk` -- as figures.** This section used to
+  say they did not, and for page text and knowledge items that was true: the
+  ~24% lorem/WIP pages of `typology-multifamily` are flagged at
+  `source_page.content_status` and produced no page chunks and no items. But
+  `tools/crop_figures.py` and `tools/describe_figures.py` cropped and described
+  the figures on those pages regardless, and the resulting chunks carry
+  `chunk.content_status = 'real'` because nothing propagated the page's flag
+  down to them. 141 chunks -- 139 on `typology-multifamily`, 2 on
+  `framework-vol-e2` -- were served as fact by both this server and the web
+  app.
+
+  `v_retrievable_chunk` now folds `source_page.content_status` into
+  `is_placeholder`, so a chunk inherits the status of the page it came from.
+  The default MCP surface dropped from 2,827 chunks to 2,686 the day that
+  landed. Those 141 come back with `include_placeholder=true`, labelled; the
+  web app shows them stamped rather than hiding them, which is the difference
+  between the two surfaces and is deliberate. `CONTRACT.md` asks for
+  placeholder content to be flagged, not ingested as fact — the flag existed,
+  and only the text path was reading it.
+- **`get_requirement_matrix` never does `SELECT *`.** It selects a fixed,
+  named column allowlist, intersected at query time with
+  `information_schema.columns`, and reports anything missing under
+  `missing_columns` instead of raising. If `document_slug` or `page_index`
+  themselves go missing, it refuses to return uncited rows rather than guess.
+
+  This was written while the view was being changed under it, and the scope
+  dimension it was bracing for landed as the `requirement_scope` /
+  `requirement_scope_applicability` tables and `v_requirement_scope_matrix`
+  rather than as columns here. The defensiveness is kept anyway: it costs one
+  `information_schema` read per call and it is the reason a view edit degrades
+  this tool instead of breaking it.

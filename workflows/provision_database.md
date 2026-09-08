@@ -23,22 +23,58 @@ Rules that make this survivable rather than a second source of truth:
 - **Idempotent statements only** (`ADD COLUMN IF NOT EXISTS`,
   `CREATE INDEX IF NOT EXISTS`), so re-applying is safe and a partial failure
   can be retried.
-- **Apply to every database**, local and Neon, in the same sitting. A column
-  that exists on one is a production-only failure nothing local can reproduce.
+- **Apply to every database**, local, `arch_test` and Neon, in the same
+  sitting. A column that exists on one is a production-only failure nothing
+  local can reproduce. `arch_test` is in that list because the test database is
+  built from `schema.sql` and is where a missed migration shows up as a suite
+  that cannot see its own fixtures.
 - **Run as the owner, not `arch_app`.** `ALTER TABLE` needs ownership; the app
   role gets `must be owner of table` and nothing else. Locally that is
-  `postgres`; on Neon it is `NEON_ADMIN_URL`.
+  `postgres`; on Neon it is `NEON_ADMIN_URL` **with `-pooler` stripped** — see
+  the Neon section below, and the recipe here already does it.
+
+### Migrating a view
+
+Views do not have an `IF NOT EXISTS` form, so "idempotent statements only"
+needs spelling out for them:
+
+- `CREATE OR REPLACE VIEW` can **only append** columns to the end of the select
+  list. It cannot remove, rename, retype or reorder one — those fail with
+  `cannot change name of view column`. Appending is the common case and keeps
+  the grants.
+- Anything else needs `DROP VIEW IF EXISTS` + `CREATE VIEW`. That **loses the
+  grants**, so re-`GRANT SELECT` at the end of the migration, guarded on the
+  role existing (`db/roles.sql` may never have run on that database).
+- Drop dependent views **child-first and never `CASCADE`** — cascade silently
+  takes whatever else has grown on the view since.
+- Restate `WITH (security_invoker = true)` on every `CREATE OR REPLACE VIEW`
+  rather than trusting replace to carry reloptions forward. `db/test_schema.sh`
+  asserts no view lacks it, and a view that defaults back to `security_definer`
+  serves every row to anonymous callers.
+
+`db/migrate/2026-09-07_retrieval_policy.sql` is the worked example of all four.
 
 ```sh
 python3 - <<'EOF'
 import os, pathlib, psycopg
 from tools import env; env.load_env()
 sql = pathlib.Path("db/migrate/<file>.sql").read_text()
-for dsn in ("postgresql://postgres:dev@localhost:55432/postgres", os.environ["NEON_ADMIN_URL"]):
-    with psycopg.connect(dsn) as c:
-        c.execute(sql); c.commit()
+# NEON_ADMIN_URL is the pooled endpoint and pooled cannot carry DDL, so strip
+# -pooler exactly as scripts/load_neon.sh does. This used to read the variable
+# as-is, three paragraphs above the section warning not to.
+neon = os.environ["NEON_ADMIN_URL"].replace("-pooler.", ".")
+for dsn in ("postgresql://postgres:dev@localhost:55432/postgres",
+            "postgresql://postgres:dev@localhost:55432/arch_test",
+            neon):
+    with psycopg.connect(dsn, connect_timeout=30) as c:
+        with c.cursor() as cur:
+            cur.execute(sql)
+        c.commit()
 EOF
 ```
+
+Then re-run it. A migration that is not safe to apply twice is not idempotent,
+and finding that out on the second database is finding it out too late.
 
 ## Tools
 
@@ -131,6 +167,23 @@ Four failures worth not repeating:
   them.** Reset the schema explicitly instead.
 
 Verify by comparing row counts per table, not just that the load exited zero.
+
+### load_neon.sh is a reload, not a migration
+
+It does `DROP SCHEMA public CASCADE` on Neon and restores a `pg_dump` of the
+**local dev database**. So production's schema becomes whatever local dev
+currently is, and neither `db/schema.sql` nor `db/migrate/` is consulted on the
+way. Two consequences that are easy to get wrong in opposite directions:
+
+- An object created only in local dev reaches Neon on the next run **without
+  ever passing through a migration** — it will look like the migration worked.
+- A migration applied only to Neon is **erased** by the next run.
+
+So: land the change in `db/schema.sql` and a `db/migrate/` file, apply it to
+every database as above, and treat `load_neon.sh` as the thing you run to move
+*rows*, not schema. The row-count comparison it prints covers seven tables and
+**no views**, so it cannot tell you the view layer survived — check that
+separately, or run `./db/test_schema.sh --existing`.
 
 ## Access
 
