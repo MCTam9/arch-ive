@@ -492,9 +492,14 @@ def classify_items(conn, document_id: str | None = None) -> dict:
     for item in items:
         if item["content_status"] in PLACEHOLDER_STATUSES:
             # Placeholder statements are not something to file a fact under a
-            # real facet -- see workflow doc for why this branch is currently
-            # a no-op against the live corpus (every knowledge_item here is
-            # 'real'; the flag exists for whatever ingests next).
+            # real facet. This branch used to be a no-op against the live
+            # corpus and is not any more: private/documents.yaml declares three
+            # of the six crib sheets `content_status: draft` -- the files are
+            # unissued drafts -- and the first re-extract to read that manifest
+            # brought 205 items through here, taking 650 facet tags with them.
+            # The consequence is deliberate for retrieval and awkward for the
+            # web app, which shows draft content labelled rather than hiding
+            # it: shown, but reachable by no facet filter.
             skipped_placeholder += 1
             continue
         item_tags = _classify_one(item, terms)

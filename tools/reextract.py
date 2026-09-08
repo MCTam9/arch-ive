@@ -162,7 +162,79 @@ def _meta_for(row: dict, static: dict[str, dict]) -> dict[str, Any]:
     }
 
 
-def plan(conn, document: str | None = None) -> list[dict]:
+# Columns that documents.yaml owns and that only `register_document` ever
+# writes -- imported rather than restated, because a second copy of this set is
+# how the two levels drifted apart in the first place.
+# `register_document` takes `is_spread_paginated` from the manifest, and then
+# `ingest_document` overwrites it from the page evidence it just read -- the
+# manifest value is a hint, the column is a measurement. Syncing it back would
+# undo that. It is the one key in `_DOCUMENT_COLUMNS` the manifest does not own.
+_MEASURED_COLUMNS = frozenset({"is_spread_paginated"})
+
+_PRINTABLE_METADATA = frozenset({
+    "content_status", "version_label", "language", "confidentiality",
+})
+
+
+def _metadata_drift(conn, row: dict, meta: dict[str, Any]) -> dict[str, Any]:
+    """Manifest values the `source_document` row no longer agrees with.
+
+    Every extractor reads `ctx.meta`, so a manifest edited after the ingest
+    reaches the knowledge items on the next re-extract -- and stops there,
+    because `register_document` runs at ingest and nothing writes these columns
+    again. That is how three crib sheets came to hold `content_status = 'real'`
+    over items that are every one of them 'draft': the file is a draft, the
+    manifest was corrected to say so a day after the ingest, and the document
+    row never heard. Only keys the manifest actually carries are compared; an
+    absent key is not an instruction to blank a column.
+
+    The comparison is `IS DISTINCT FROM` in Postgres rather than `!=` in
+    Python, because the manifest is YAML and the columns are typed: an
+    `issue_date` written as a quoted string is a `str` here and a
+    `datetime.date` there, and comparing those two reports drift on a value
+    that is already correct -- forever, since writing it changes nothing. The
+    engine that will do the UPDATE is the one that should decide whether the
+    UPDATE is needed, and it settles `date`, the enums and `text[]` alike.
+    """
+    from tools.ingest_document import _DOCUMENT_COLUMNS
+
+    columns = sorted(c for c in _DOCUMENT_COLUMNS - _MEASURED_COLUMNS if c in meta)
+    if not columns:
+        return {}
+    checks = ", ".join(f"{c} IS DISTINCT FROM %s AS differs_{i}" for i, c in enumerate(columns))
+    result = db.one(
+        conn,
+        f"SELECT {checks} FROM source_document WHERE id = %s",
+        [*(meta[c] for c in columns), row["id"]],
+    )
+    if result is None:  # RLS, or a row retired between the two statements
+        return {}
+    return {c: meta[c] for i, c in enumerate(columns) if result[f"differs_{i}"]}
+
+
+def _describe_drift(drift: dict[str, Any]) -> str:
+    """Column names always; values only for the ones that cannot name a person
+    or an organisation. `title`, `original_filename` and the `*_org_id` columns
+    are the whole reason documents.yaml is gitignored -- naming the column is
+    enough to say what changed."""
+    parts = []
+    for column in sorted(drift):
+        if column in _PRINTABLE_METADATA:
+            parts.append(f"{column}={drift[column]}")
+        else:
+            parts.append(column)
+    return ", ".join(parts)
+
+
+def _apply_drift(conn, document_id: str, drift: dict[str, Any]) -> None:
+    assignments = ", ".join(f"{c} = %s" for c in sorted(drift))
+    conn.execute(
+        f"UPDATE source_document SET {assignments} WHERE id = %s",
+        [*(drift[c] for c in sorted(drift)), document_id],
+    )
+
+
+def plan(conn, document: str | None = None, *, extract: bool = True) -> list[dict]:
     """One entry per current document: what it holds now, and what a re-extract
     would produce.
 
@@ -173,15 +245,15 @@ def plan(conn, document: str | None = None) -> list[dict]:
     handed the `Extraction` this function already produced rather than
     re-deriving it and possibly deriving something else.
     """
-    pipeline.load_extractors()
+    if extract:
+        pipeline.load_extractors()
     static = _static_meta_by_slug()
 
     where = " AND d.slug = %s" if document else ""
     rows = db.all_rows(
         conn,
-        f"""SELECT d.id::text AS id, d.slug, d.doc_kind::text AS doc_kind, d.sha256,
-                   d.page_count, d.title, d.content_status::text AS content_status,
-                   d.is_spread_paginated
+        f"""SELECT d.*, d.id::text AS id, d.doc_kind::text AS doc_kind,
+                   d.content_status::text AS content_status
               FROM source_document d
              WHERE d.is_current{where}
              ORDER BY d.slug""",
@@ -190,6 +262,7 @@ def plan(conn, document: str | None = None) -> list[dict]:
 
     work: list[dict] = []
     for row in rows:
+        meta = _meta_for(row, static)
         entry: dict[str, Any] = {
             "document_id": row["id"],
             "slug": row["slug"],
@@ -197,9 +270,16 @@ def plan(conn, document: str | None = None) -> list[dict]:
             "before": counts(conn, row["id"]),
             "extraction": None,
             "predicted": {"items": 0, "citations": 0, "warnings": 0},
+            "drift": _metadata_drift(conn, row, meta),
             "skip": None,
         }
         work.append(entry)
+
+        if not extract:
+            # A metadata-only pass reads documents.yaml and the document row.
+            # It needs neither the original nor the extractor, so it must not
+            # report a missing original as a skip.
+            continue
 
         path = find_original(row["slug"], row["sha256"])
         if path is None:
@@ -220,7 +300,7 @@ def plan(conn, document: str | None = None) -> list[dict]:
             doc_kind=row["doc_kind"],
             page_count=row["page_count"] or len(pages),
             pages=pages,
-            meta=_meta_for(row, static),
+            meta=meta,
         )
         try:
             extraction = pipeline.for_doc_kind(row["doc_kind"]).extract(ctx)
@@ -257,6 +337,39 @@ def _reset_account(conn) -> None:
     conn.execute("SELECT set_config('app.account_id', %s, false)", (db.account_id(),))
 
 
+def _sync_one(conn, entry: dict, result: dict) -> None:
+    """Write one document's manifest drift, and record what changed."""
+    if not entry["drift"]:
+        return
+    try:
+        _apply_drift(conn, entry["document_id"], entry["drift"])
+        conn.commit()
+        result["metadata"] = _describe_drift(entry["drift"])
+    except Exception as exc:  # noqa: BLE001 - one column set is not the run
+        conn.rollback()
+        _reset_account(conn)
+        result["metadata"] = f"FAILED: {type(exc).__name__}: {exc}"
+
+
+def sync_metadata(conn, work: list[dict]) -> dict:
+    """Apply documents.yaml to `source_document` and nothing else.
+
+    Separated from `apply` because it is the cheap half: no original file, no
+    extractor, no re-embedding, and nothing a human reviewed is reset. A
+    manifest correction is the common case and should not cost a corpus pass.
+    """
+    results = []
+    for entry in work:
+        result = {"slug": entry["slug"], "status": "ok", "before": entry["before"], "after": None}
+        results.append(result)
+        _sync_one(conn, entry, result)
+    return {
+        "documents": results,
+        "ok": 0, "skipped": 0, "refused": 0, "failed": 0, "embedded": 0,
+        "metadata": sum(1 for r in results if r.get("metadata")),
+    }
+
+
 def apply(conn, work: list[dict], *, allow_empty: bool = False, embed: bool = True) -> dict:
     """Rewrite each planned document: writer, enrichments, embedder.
 
@@ -270,6 +383,12 @@ def apply(conn, work: list[dict], *, allow_empty: bool = False, embed: bool = Tr
     for entry in work:
         result = {"slug": entry["slug"], "before": entry["before"], "after": None}
         results.append(result)
+
+        # Metadata first, in a transaction of its own. It needs no original and
+        # no extractor, so a document this pass has to skip still gets the
+        # manifest applied to its row -- and a failed extraction below cannot
+        # roll it back out again.
+        _sync_one(conn, entry, result)
 
         if entry["skip"]:
             result["status"] = "skipped"
@@ -317,6 +436,7 @@ def apply(conn, work: list[dict], *, allow_empty: bool = False, embed: bool = Tr
         "refused": sum(1 for r in results if r["status"] == "refused"),
         "failed": sum(1 for r in results if r["status"] == "failed"),
         "embedded": sum(r.get("embedded") or 0 for r in ok),
+        "metadata": sum(1 for r in results if r.get("metadata")),
     }
 
 
@@ -398,6 +518,11 @@ def _print_plan(work: list[dict]) -> None:
             if pred["warnings"]:
                 notes.append(f"{pred['warnings']} extractor warning(s)")
             note = "; ".join(notes)
+        if e["drift"]:
+            # Shown for a skipped document too: the metadata sync needs no
+            # original, so it lands whether or not the extractor runs.
+            drift_note = f"metadata: {_describe_drift(e['drift'])}"
+            note = f"{drift_note}; {note}" if note else drift_note
         print(f"  {e['slug']:30} {arrow_items:>16} {arrow_cites:>16} {chunks:>8}  {note}")
 
 
@@ -411,6 +536,9 @@ def main() -> int:
                          "that currently has some")
     ap.add_argument("--no-embed", action="store_true",
                     help="leave rewritten chunks unembedded; run tools.embed_chunks after")
+    ap.add_argument("--metadata-only", action="store_true",
+                    help="apply private/documents.yaml to source_document and stop -- no "
+                         "re-extraction, no reset review decisions")
     ap.add_argument("--yes", action="store_true", help="write; without it this is a dry run")
     args = ap.parse_args()
 
@@ -419,11 +547,31 @@ def main() -> int:
         if args.status:
             return status(conn, args.document)
 
-        work = plan(conn, args.document)
+        work = plan(conn, args.document, extract=not args.metadata_only)
         if not work:
             print(f"reextract: no current document matches {args.document!r}")
             return 1
         print(f"reextract: {len(work)} document(s) in scope\n")
+
+        if args.metadata_only:
+            drifted = [e for e in work if e["drift"]]
+            for e in drifted:
+                print(f"  {e['slug']:30} {_describe_drift(e['drift'])}")
+            print(f"\nreextract: {len(drifted)} of {len(work)} document(s) disagree with "
+                  f"private/documents.yaml")
+            if not drifted:
+                return 0
+            if not args.yes:
+                print("dry run -- source_document metadata only; pass --yes to write")
+                return 0
+            report = sync_metadata(conn, work)
+            print()
+            for r in report["documents"]:
+                if r.get("metadata"):
+                    print(f"  {r['slug']:30} {r['metadata']}")
+            print(f"\nreextract: {report['metadata']} document row(s) updated")
+            return 0
+
         _print_plan(work)
 
         refused = [e for e in work if _would_empty(e) and not args.allow_empty]
@@ -439,6 +587,8 @@ def main() -> int:
 
     print()
     for r in report["documents"]:
+        if r.get("metadata"):
+            print(f"  {r['slug']:30} metadata {r['metadata']}")
         if r["status"] != "ok":
             print(f"  {r['slug']:30} {r['status']}: {r['detail']}")
             continue

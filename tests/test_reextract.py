@@ -248,3 +248,110 @@ def test_the_rls_account_survives_a_rollback(corpus, monkeypatch):
         reextract.apply(conn, work, embed=False)
         assert db.scalar(conn, "SELECT current_setting('app.account_id', true)") == db.account_id()
         assert db.scalar(conn, "SELECT count(*) FROM source_document") > 0
+
+
+# ── documents.yaml -> source_document ────────────────────────────────────────
+#
+# Every extractor reads `ctx.meta`, which comes from private/documents.yaml, so
+# a manifest edited after the ingest reaches the knowledge items on the next
+# re-extract. It used to stop there: `register_document` writes the document
+# columns at ingest and nothing wrote them again, so three crib sheets sat at
+# `content_status = 'real'` over items that were every one of them 'draft'.
+
+
+def _manifest(monkeypatch, by_slug: dict[str, dict]) -> None:
+    monkeypatch.setattr(reextract, "_static_meta_by_slug", lambda: by_slug)
+
+
+def test_the_manifest_is_applied_to_the_document_row(corpus, monkeypatch):
+    _manifest(monkeypatch, {SLUG_A: {"content_status": "draft", "version_label": "V.02"}})
+    with db.connect() as conn:
+        work = reextract.plan(conn, extract=False)
+        report = reextract.sync_metadata(conn, work)
+        row = db.one(
+            conn,
+            "SELECT content_status::text AS cs, version_label FROM source_document WHERE slug = %s",
+            (SLUG_A,),
+        )
+        other = db.one(
+            conn, "SELECT content_status::text AS cs FROM source_document WHERE slug = %s", (SLUG_B,)
+        )
+    assert report["metadata"] == 1
+    assert (row["cs"], row["version_label"]) == ("draft", "V.02")
+    assert other["cs"] == "real", "a document the manifest says nothing about is left alone"
+
+
+def test_a_key_the_manifest_omits_is_not_blanked(corpus, monkeypatch):
+    """An absent key is silence, not an instruction. The three crib sheets that
+    prompted this carry no `version_label` at all, and a sync that read that as
+    NULL would erase the label off every document that has one."""
+    with db.connect() as conn:
+        conn.execute("UPDATE source_document SET version_label = 'V.01' WHERE slug = %s", (SLUG_A,))
+        conn.commit()
+    _manifest(monkeypatch, {SLUG_A: {"content_status": "draft"}})
+    with db.connect() as conn:
+        reextract.sync_metadata(conn, reextract.plan(conn, extract=False))
+        row = db.one(
+            conn,
+            "SELECT content_status::text AS cs, version_label FROM source_document WHERE slug = %s",
+            (SLUG_A,),
+        )
+    assert (row["cs"], row["version_label"]) == ("draft", "V.01")
+
+
+def test_is_spread_paginated_is_measured_and_never_synced_back(corpus, monkeypatch):
+    """`register_document` takes it from the manifest and then `ingest_document`
+    overwrites it from the page evidence it just read. The column is the
+    measurement; syncing the declaration back would undo the reading."""
+    _manifest(monkeypatch, {SLUG_A: {"is_spread_paginated": True}})
+    with db.connect() as conn:
+        work = reextract.plan(conn, extract=False)
+        entry = next(e for e in work if e["slug"] == SLUG_A)
+        assert entry["drift"] == {}
+        assert reextract.sync_metadata(conn, work)["metadata"] == 0
+        assert db.scalar(
+            conn, "SELECT is_spread_paginated FROM source_document WHERE slug = %s", (SLUG_A,)
+        ) is False
+
+
+def test_a_metadata_pass_rewrites_no_knowledge_items(corpus, monkeypatch):
+    """The cheap half has to stay cheap: no extractor, no writer, and above all
+    no reset of the review decisions a full re-extract does cost."""
+    _manifest(monkeypatch, {SLUG_A: {"content_status": "draft"}})
+    with db.connect() as conn:
+        before = db.all_rows(
+            conn, "SELECT id FROM knowledge_item WHERE document_id = %s ORDER BY id",
+            (corpus["ids"][SLUG_A],),
+        )
+        reextract.sync_metadata(conn, reextract.plan(conn, extract=False))
+        after = db.all_rows(
+            conn, "SELECT id FROM knowledge_item WHERE document_id = %s ORDER BY id",
+            (corpus["ids"][SLUG_A],),
+        )
+    assert before and [r["id"] for r in before] == [r["id"] for r in after]
+
+
+def test_a_metadata_pass_needs_no_original_on_disk(corpus, monkeypatch, tmp_path):
+    """Nothing about a document row requires the file. A corpus whose originals
+    are all archived must still be able to take a manifest correction."""
+    monkeypatch.setenv("SOURCE_DIR", str(tmp_path / "empty"))
+    _manifest(monkeypatch, {SLUG_A: {"content_status": "draft"}})
+    with db.connect() as conn:
+        work = reextract.plan(conn, extract=False)
+        entry = next(e for e in work if e["slug"] == SLUG_A)
+        assert entry["skip"] is None
+        assert reextract.sync_metadata(conn, work)["metadata"] == 1
+
+
+def test_drift_is_described_without_printing_a_name(corpus, monkeypatch):
+    """`title`, `original_filename` and the `*_org_id` columns are the whole
+    reason private/documents.yaml is gitignored. This output reaches a terminal
+    and, from there, a paste into an issue; naming the column says enough."""
+    secret = "Some Real Organisation Ltd"
+    described = reextract._describe_drift(
+        {"title": secret, "original_filename": f"{secret}.pdf", "client_org_id": secret,
+         "content_status": "draft"}
+    )
+    assert secret not in described
+    assert "content_status=draft" in described
+    assert "title" in described and "client_org_id" in described
