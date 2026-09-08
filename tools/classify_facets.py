@@ -41,8 +41,6 @@ CONF_RULE_AMBIG = 0.55   # a structural rule that is genuinely a coin flip
 CONF_MODEL_PHRASE = 0.55 # multi-word keyword/synonym match
 CONF_MODEL_WORD = 0.40   # single-word keyword/synonym match
 
-PLACEHOLDER_STATUSES = {"lorem", "template", "wip", "draft"}
-
 # ---------------------------------------------------------------------------
 # Structural lookup tables. Every key here was read off the live corpus
 # (criterion codes, doc_node titles, benchmark.metric_id/building_use_id
@@ -451,6 +449,7 @@ def _classify_one(item: dict, terms: list[_Term]) -> list[_Tag]:
 _ITEM_QUERY = """
     SELECT
         ki.id, ki.item_type, ki.title, ki.statement, ki.content_status,
+        is_placeholder_status(ki.content_status) AS is_placeholder,
         d.slug AS doc_slug, d.doc_kind::text AS doc_kind,
         n.title AS node_title, n.title_alt AS node_title_alt,
         c.code AS criterion_code, c.title_primary AS criterion_title,
@@ -485,23 +484,24 @@ def classify_items(conn, document_id: str | None = None) -> dict:
     by_taxonomy: dict[str, int] = {}
     tagged_items = 0
     total_tags = 0
-    skipped_placeholder = 0
+    placeholder_items = 0
     item_ids = [i["id"] for i in items]
 
     plan: list[tuple[str, str, float, str]] = []  # (item_id, term_id, confidence, assigned_by)
     for item in items:
-        if item["content_status"] in PLACEHOLDER_STATUSES:
-            # Placeholder statements are not something to file a fact under a
-            # real facet. This branch used to be a no-op against the live
-            # corpus and is not any more: private/documents.yaml declares three
-            # of the six crib sheets `content_status: draft` -- the files are
-            # unissued drafts -- and the first re-extract to read that manifest
-            # brought 205 items through here, taking 650 facet tags with them.
-            # The consequence is deliberate for retrieval and awkward for the
-            # web app, which shows draft content labelled rather than hiding
-            # it: shown, but reachable by no facet filter.
-            skipped_placeholder += 1
-            continue
+        # A placeholder item is tagged like any other. This used to skip them,
+        # from a time when a tag was the only thing that could carry an item
+        # into a facet listing, so withholding one was a way of hiding it.
+        # Visibility is not this module's to decide any more: the schema states
+        # it once in `is_placeholder_status()`, `v_retrievable_chunk` and
+        # `v_retrievable_item` expose it as a column, and each surface opts in
+        # -- MCP excludes placeholders by default, the web app shows them
+        # stamped. A skip here is a second, weaker copy of that rule, and it
+        # disagrees with the web app: shown, but reachable by no facet filter.
+        # It stopped being theoretical when documents.yaml was corrected to
+        # call three crib sheets what they are, and 205 items lost 650 tags.
+        if item["is_placeholder"]:
+            placeholder_items += 1
         item_tags = _classify_one(item, terms)
         if item_tags:
             tagged_items += 1
@@ -527,9 +527,9 @@ def classify_items(conn, document_id: str | None = None) -> dict:
 
     return {
         "items_considered": len(items),
-        "items_skipped_placeholder": skipped_placeholder,
+        "items_placeholder": placeholder_items,
         "items_tagged": tagged_items,
-        "items_untagged": len(items) - skipped_placeholder - tagged_items,
+        "items_untagged": len(items) - tagged_items,
         "tags_written": total_tags,
         "by_taxonomy": by_taxonomy,
     }
@@ -541,6 +541,6 @@ if __name__ == "__main__":
         result = classify_items(_conn, doc_id)
     print(f"classify_facets: {result['items_tagged']}/{result['items_considered']} items tagged "
           f"({result['tags_written']} tags written, {result['items_untagged']} untagged, "
-          f"{result['items_skipped_placeholder']} placeholder skipped)")
+          f"{result['items_placeholder']} of them placeholder)")
     for taxonomy_id, count in sorted(result["by_taxonomy"].items()):
         print(f"  {taxonomy_id:<14} {count}")

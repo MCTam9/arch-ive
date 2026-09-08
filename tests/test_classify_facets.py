@@ -92,12 +92,44 @@ def test_tags_the_facets_the_statement_names():
     assert any(t.startswith("scale.building") for t in tags), tags
 
 
-def test_placeholder_content_is_not_tagged():
-    """Identical text, flagged lorem. The flag has to win, or the facet
-    browser serves placeholder text under a real topic."""
+def test_placeholder_content_is_tagged_like_anything_else():
+    """Identical text, flagged lorem, tagged the same.
+
+    This asserted the opposite until 2026-09-08, on the reasoning that "the
+    flag has to win, or the facet browser serves placeholder text under a real
+    topic". The flag does win -- it just does not win here. Visibility is
+    stated once, in `is_placeholder_status()`, and each surface opts in:
+    `search_knowledge` excludes placeholders unless asked, the web app shows
+    them stamped. Withholding the tag was a second copy of that rule, and a
+    copy that disagreed with the web app -- a draft item appeared in an
+    unfiltered listing and then vanished the moment a facet was picked, with
+    the sidebar count that had promised it also wrong.
+    """
     with db.transaction() as conn:
         classify_items(conn, DOC_ID)
-        assert _tags(conn, LOREM_ITEM) == {}
+        assert _tags(conn, LOREM_ITEM) == _tags(conn, WATER_ITEM)
+
+
+def test_a_placeholder_item_is_reported_but_not_hidden():
+    """The count survived the skip it used to describe. An ingest that starts
+    tagging a whole document of lorem should still be visible as a number."""
+    with db.transaction() as conn:
+        result = classify_items(conn, DOC_ID)
+    assert result["items_placeholder"] == 1
+    assert result["items_placeholder"] < result["items_tagged"]
+    assert "items_skipped_placeholder" not in result
+
+
+def test_the_placeholder_rule_is_read_from_the_schema():
+    """`is_placeholder_status()` is the one statement of which statuses count.
+    classify_facets held a fourth copy of that set as a Python constant; it
+    reads the function now, so a status added to the enum reaches it."""
+    import tools.classify_facets as cf
+
+    assert not hasattr(cf, "PLACEHOLDER_STATUSES")
+    with db.transaction() as conn:
+        assert db.scalar(conn, "SELECT is_placeholder_status('draft'::content_status)") is True
+        assert db.scalar(conn, "SELECT is_placeholder_status('real'::content_status)") is False
 
 
 # Facets that describe what an item SAYS, as opposed to where it came from.

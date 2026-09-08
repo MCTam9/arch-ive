@@ -38,9 +38,16 @@ per taxonomy, along with the untagged count — read that number, don't skip it.
 - **Provenance is not inference.** `authority` is a property of the document,
   true of every item in it. Tagging it universally is correct and is not
   over-tagging; content facets are the ones that must be earned.
-- **Placeholder content is skipped.** Items flagged `lorem`, `template`, `wip`
-  or `draft` are not filed under a real facet — otherwise the facet browser
-  serves placeholder text as guidance.
+- **Placeholder content is tagged like anything else.** It was skipped until
+  2026-09-08, on the reasoning that the facet browser would otherwise serve
+  placeholder text as guidance. It does not: visibility is stated once, in
+  `is_placeholder_status()` in `db/schema.sql`, and each surface opts in —
+  `search_knowledge` excludes placeholders unless asked, the web app shows them
+  stamped. Withholding the tag was a second copy of that rule, and it disagreed
+  with the web app: a draft item appeared in an unfiltered listing and then
+  vanished the moment a facet was picked, with the sidebar count that had
+  promised it wrong too. The result still reports `items_placeholder`, so an
+  ingest that starts tagging a document of lorem is visible as a number.
 
 ## Maintaining the lexicon
 

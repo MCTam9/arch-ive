@@ -345,6 +345,41 @@ python3 -m tools.reextract --document crib-water --yes     # one document
 python3 -m tools.reextract --yes                           # the corpus pass
 ```
 
+**A manifest correction is a different job, and a cheaper one.**
+
+```sh
+python3 -m tools.reextract --metadata-only         # what documents.yaml would change
+python3 -m tools.reextract --metadata-only --yes   # write source_document, nothing else
+```
+
+`register_document` writes the manifest's columns onto `source_document` once,
+at ingest, and nothing writes them again. But every extractor reads `ctx.meta`,
+which is `private/documents.yaml` re-read, so a manifest edited *after* the
+ingest reaches the knowledge items on the next re-extract and stops there. Ten
+of the fourteen documents had drifted that way by 2026-09-08 — three crib
+sheets sitting at `content_status = 'real'` over items that were every one of
+them `draft`, two missing a version label, five missing an issue date or a
+revision — and `get_document` reports a status breakdown, so it was showing a
+document headed one way over items headed the other.
+
+`--metadata-only` syncs the document row and stops: no extractor, no
+re-embedding, and none of the review decisions a full re-extract resets. It
+needs no original on disk, so an archived corpus can still take a correction.
+Two things it deliberately does not do:
+
+- **`is_spread_paginated` is never synced.** `register_document` takes it from
+  the manifest and then `ingest_document` overwrites it from the page evidence
+  it just read. The manifest value is a hint; the column is the measurement.
+- **An absent key is silence, not NULL.** Only keys the manifest actually
+  carries are compared, so a document with no `version_label:` line keeps the
+  label it has.
+
+The comparison runs as `IS DISTINCT FROM` in Postgres rather than `!=` in
+Python. YAML is untyped where the columns are not: an `issue_date` written
+quoted is a `str` on one side and a `date` on the other, and comparing those
+reports drift on a value that is already correct — forever, because writing it
+changes nothing.
+
 `--status` is the "is this worth running" view: items and citations per
 document, how many of those citations carry a printed page label or a bbox,
 how many requirements hold a numeric `target_text` that did not parse, and
