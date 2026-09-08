@@ -37,6 +37,15 @@ psql "postgresql://postgres:dev@localhost:55432/postgres" -f db/schema.sql
 ```
 (then re-grant: see `db/test_schema.sh` for the role and seed account SQL)
 
+**Changing an existing database needs a migration, not just a schema edit.**
+`db/schema.sql` is the current shape, applied whole to a fresh database; it is
+not a history. A change to a database that already exists goes in
+`db/migrate/<YYYY-MM-DD>_<what>.sql` **and** into `db/schema.sql` in the same
+commit, and gets applied to local dev, `arch_test` and Neon in the same sitting.
+The rules for writing one — including what `CREATE OR REPLACE VIEW` can and
+cannot change, and why a `DROP` needs a re-`GRANT` — are in
+`workflows/provision_database.md`.
+
 ## The source corpus
 
 14 files, currently in `Excel/`, `PDF/`, `Report - Guidance/`, `Table - PDF/`.
@@ -56,9 +65,47 @@ folders is tracked by git.
 `tools/db.py` — `connect()`, `transaction()`, `one()`, `all_rows()`, `scalar()`,
 `insert_returning_id()`. One stage, one transaction.
 
+`db/schema.sql` — **the retrieval policy is a cross-module interface, and it is
+SQL.** Three adapters read the corpus — `tools/search.py`, `tools/mcp_server.py`
+and `web/lib/queries.ts`, in two languages — and the rules deciding what a
+reader may be shown live in one place so they cannot drift apart. They did
+drift: the taxonomy subtree rule was fixed twice, once per language, in two
+separate commits.
+
+| Object | Holds |
+|---|---|
+| `is_placeholder_status(content_status)` | the four placeholder statuses, once |
+| `v_item_term_subtree` | the only place ltree `<@` is written |
+| `item_has_term(item_id, term_id)` | the facet predicate. Returns **false, not NULL**, for a NULL item — a page or figure chunk has none, and callers count what they suppress |
+| `v_term_item_count` | facet counts that cannot disagree with the filter |
+| `v_retrievable_chunk` | the search surface. Rejected items and sub-floor page text are excluded in its `WHERE`; `is_placeholder` and `has_citation` are columns a caller opts into |
+| `v_retrievable_item` | the browse surface, same column names, one citation per item |
+
+Two rules are unconditional and already applied: `review_status = 'rejected'`
+never appears (a human rejected that extraction), and a chunk **inherits its
+page's `content_status`** — figures cropped from a WIP page are not real
+content, which is what `CONTRACT`'s "flagged, never silently ingested" means
+one layer down.
+
+Placeholder visibility is where the two surfaces deliberately differ: MCP
+excludes it by default, the web app shows it labelled. That is a parameter,
+not an accident. Do not add a policy clause to an adapter — add it to the view
+and let all three inherit it.
+
 `tools/pipeline.py` — the contract:
 
 - `State` — the ingest state machine, in order.
+- `STAGES` — the ordered sequence, and the only place it exists. Each entry
+  pairs a `State` with the function that runs it; `tools/ingest_inbox.py` binds
+  those with `@runs_stage` at import and iterates the list. `stage_sequence()`
+  raises if any entry is unbound, and `runs_stage` raises on a state not in the
+  list, so neither a typo nor a missing import can silently drop a stage. A
+  stage returns `None` to continue or a `Halt` to end the job early, and only a
+  stage declared `ends_run` may return one.
+- `ENRICHMENTS` — the ordered steps inside `State.ENRICHED`, all normalised to
+  `run(conn, *, document_id, slug)`. They share one stage and one transaction
+  because `ingest_state` has a single name for them; splitting one out means
+  adding an enum value first.
 - `run_stage(job_id, stage, fn)` — runs `fn(conn)` once. Idempotency is enforced
   by `UNIQUE (job_id, stage)` on `ingest_stage_run`. Returns True if the stage
   succeeded or had already succeeded. Raise `StageSkipped` for "nothing to do".
@@ -153,6 +200,15 @@ pipeline.register(CRIB_SHEET)
 ```
 with `doc_kinds: tuple[str, ...]` on the class.
 
+`extractors/support.py` holds the rules above as code — `parse_value`,
+`is_placeholder_value`, `page_is_real`, `slugify`, `clean` — so a shape does not
+get its own dialect of them. It is pure, registers nothing, and must stay
+import-safe: `pipeline.load_extractors()` imports every module in the package on
+every run. Reach for it before writing a second parser; the eight sites that
+hardcoded `is_placeholder: False` are what its absence cost.
+`workflows/add_extractor.md` lists it, because `scripts/check_wat.py` requires
+every file in `extractors/` to appear in that registry.
+
 ## Testing
 
 Tests run against a **separate** database, created once:
@@ -181,14 +237,17 @@ Two rules apply across all of them: every result carries a document slug +
 page citation (a row with neither is dropped, not returned with a null
 citation), and `content_status` in `{lorem, template, wip, draft}` is
 excluded by default -- pass `include_placeholder=True` to see it anyway,
-always labelled `is_placeholder`/`is_placeholder_content` on the row.
+always labelled `is_placeholder`/`is_placeholder_content` on the row. Both are
+enforced by the views above rather than restated here; `get_citation` is the
+documented exception, returning rejected and placeholder rows labelled because
+the caller already holds a specific `item_id`.
 
 ```python
 # tools/mcp_server.py
 def search_knowledge(conn, query: str, *, facets: dict[str, str] | None = None,
                       limit: int = 20, include_placeholder: bool = False) -> dict:
-    """Hybrid full-text + vector search (delegates to tools.search.search
-    for the default, real-content-only path). Each result carries a
+    """Hybrid full-text + vector search over v_retrievable_chunk, via
+    tools.search.search -- one call, both paths. Each result carries a
     `citation` dict with document_slug + page_from/page_to."""
 
 def get_benchmark(conn, *, metric: str | None = None, building_use: str | None = None,
