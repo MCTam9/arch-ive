@@ -410,7 +410,11 @@ which stays a deliberate act with `tools/fetch_original.py` behind it.
   SHA-256, not the filename.
 - **Edited copy under the same name.** Registered as a new revision:
   `supersedes_id` set, previous row `is_current = false`. Old citations still
-  resolve. Four of the six crib sheets are stamped Draft, so expect this.
+  resolve. Three of the six crib sheets are unissued drafts -- the three
+  carrying no `version_label` in `private/documents.yaml` -- so expect this.
+  This said four until 2026-09-08. Only the manifest records which: the Draft
+  stamp is a graphic and reaches the text layer of exactly one of the six, so
+  counting them off the files is not a check that works.
 - **Unrecognised document shape.** The generic extractor still runs and the
   document is still full-text searchable; the file lands in `_review/`.
   Nothing is ever silently discarded.
