@@ -129,18 +129,20 @@ export async function getHomeSummary(accountId: string): Promise<HomeSummary> {
           SELECT json_agg(t ORDER BY (t->>'n')::int DESC)
             FROM (
               SELECT json_build_object('id', item_type::text, 'n', count(*)::int) AS t
-                FROM knowledge_item GROUP BY item_type
+                FROM v_retrievable_item GROUP BY item_type
             ) s), '[]'::json),
         'totals', json_build_object(
-          'items',     (SELECT count(*)::int FROM knowledge_item),
+          'items',     (SELECT count(*)::int FROM v_retrievable_item),
+          -- Source material, not retrievable content -- no tile links pages or
+          -- documents to a filtered list, so these two stay on the base
+          -- tables rather than the retrieval-policy views.
           'documents', (SELECT count(*)::int FROM source_document WHERE is_current),
           'pages',     (SELECT count(*)::int FROM source_page),
-          -- Indexed figures, not described ones. 898 carry a description and
-          -- 1,763 assets exist, but 114 are decorative and never reach the
-          -- index, so 784 is the number a search can actually return. Counting
-          -- the chunks rather than the descriptions means the line cannot
-          -- drift from what the index holds.
-          'figures',   (SELECT count(*)::int FROM chunk WHERE asset_id IS NOT NULL)
+          -- Same view the search reads (v_retrievable_chunk), so this count
+          -- cannot drift from what the index holds -- the arithmetic that used
+          -- to justify 784 by hand (898 described, 1,763 assets, 114
+          -- decorative) was a second copy of a rule the view already states.
+          'figures',   (SELECT count(*)::int FROM v_retrievable_chunk WHERE asset_id IS NOT NULL)
         )
       ) AS summary
     `);

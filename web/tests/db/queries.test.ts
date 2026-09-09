@@ -313,6 +313,49 @@ describe("rejected items", () => {
     expect(item).not.toBeNull();
     expect(item?.review_status).toBe("rejected");
   });
+
+  test("are not counted in the home page's totals or item-type tiles", async () => {
+    // arch_test is shared, so the absolute totals are not this fixture's to
+    // assert on -- only the delta a known insert produces is. One approved
+    // item and one rejected item go in; the honest check is that the total
+    // moves by +1, not +2, and getHomeSummary's own item-type tile agrees.
+    const before = await getHomeSummary(TEST_ACCOUNT_ID);
+    const itemTypeBefore =
+      before.itemTypes.find((t) => t.id === "definition")?.n ?? 0;
+
+    const pair = await withAccount(TEST_ACCOUNT_ID, async (client) => {
+      const one = async (reviewStatus: string) =>
+        (
+          await client.query(
+            `INSERT INTO knowledge_item (document_id, item_type, title, statement,
+                                         content_status, review_status)
+             VALUES ($1, 'definition', $2, $3, 'real', $4::review_status)
+             RETURNING id::text`,
+            [
+              ids.documentId,
+              `home summary ${reviewStatus}`,
+              body(`home summary ${reviewStatus}`),
+              reviewStatus,
+            ],
+          )
+        ).rows[0].id as string;
+      return { approved: await one("approved"), rejected: await one("rejected") };
+    });
+
+    try {
+      const after = await getHomeSummary(TEST_ACCOUNT_ID);
+      const itemTypeAfter =
+        after.itemTypes.find((t) => t.id === "definition")?.n ?? 0;
+      expect(after.totals.items - before.totals.items).toBe(1);
+      expect(itemTypeAfter - itemTypeBefore).toBe(1);
+    } finally {
+      await withAccount(TEST_ACCOUNT_ID, (client) =>
+        client.query(`DELETE FROM knowledge_item WHERE id = ANY($1)`, [
+          [pair.approved, pair.rejected],
+        ]),
+      );
+    }
+  });
 });
 
 // ── citations ─────────────────────────────────────────────────────────────
