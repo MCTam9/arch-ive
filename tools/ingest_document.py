@@ -74,6 +74,10 @@ _LOREM_FRACTION = 0.12
 
 _TEMPLATE_ONLY_RE = re.compile(r"template\s*\n?\s*only", re.IGNORECASE)
 _WIP_RE = re.compile(r"(?<!\w)WIP(?!\w)")
+# the literal phrase, for the generators (unlike this corpus's own filler)
+# that do spell it out -- a page can fall under the 150-word floor the
+# fraction rule needs and still be unambiguously lorem ipsum.
+_LOREM_STAMP_RE = re.compile(r"lorem\s+ipsum", re.I)
 _WORD_RE = re.compile(r"[a-z]+")
 
 # a document is 'mixed' once placeholder pages stop being a rounding error
@@ -86,6 +90,8 @@ def _page_content_status(text: str) -> str:
         return "wip"
     if _TEMPLATE_ONLY_RE.search(text):
         return "template"
+    if _LOREM_STAMP_RE.search(text):
+        return "lorem"
     words = _WORD_RE.findall(text.lower())
     if len(words) >= _LOREM_MIN_WORDS:
         hits = sum(1 for w in words if w in _LATIN_STOPWORDS)

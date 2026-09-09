@@ -21,29 +21,10 @@ from __future__ import annotations
 
 import re
 
+from extractors.support import page_is_real
 from tools.pipeline import Citation, DocumentContext, Extraction, Item, Node, register
 
 MAX_STATEMENT_CHARS = 4000
-
-# stamps that mean "this page is not real content", independent of whatever
-# content_status the page row already carries -- belt and braces, since this
-# extractor is the one place a bad document cannot be allowed to look fine.
-PLACEHOLDER_RE = re.compile(
-    r"\bTEMPLATE\s+ONLY\b|\bWIP\b|\blorem\s+ipsum\b", re.I
-)
-
-
-def _looks_like_placeholder(text: str) -> bool:
-    if not text:
-        return False
-    if PLACEHOLDER_RE.search(text):
-        return True
-    # lorem ipsum without the literal words: a handful of its stock tokens
-    # co-occurring is a strong enough signal without hardcoding a whole copy
-    # of the passage.
-    tokens = ("dolor", "consectetur", "adipiscing", "elit", "tempor", "incididunt")
-    hits = sum(1 for t in tokens if t in text.lower())
-    return hits >= 3
 
 
 def _clean_title(text: str, limit: int = 120) -> str:
@@ -129,9 +110,11 @@ class GenericExtractor:
             page_index = page.get("page_index")
             if page_index is None:
                 continue
-            status = page.get("content_status", "real")
             text = page.get("text") or ""
-            if status != "real" or _looks_like_placeholder(text):
+            # content_status is decided once, by ingest, before any extractor
+            # runs; this one just obeys it rather than re-deriving its own
+            # verdict (see extractors/support.py:page_is_real).
+            if not page_is_real(page):
                 skipped += 1
                 continue
             if not text.strip():
@@ -150,7 +133,13 @@ class GenericExtractor:
                 statement=statement,
                 summary=None,
                 node_ref=node_ref,
-                content_status=status,
+                # Read off the page rather than hardcoded 'real'. The guard
+                # above already guarantees it, so this looks redundant and is
+                # not: loosen that guard one day -- to show drafts labelled,
+                # say -- and a hardcoded 'real' silently relabels placeholder
+                # content as fact. That is exactly how 141 figure chunks came
+                # to sit on WIP pages carrying content_status='real'.
+                content_status=page.get("content_status", "real"),
                 confidence=0.5,
                 citations=[Citation(page_index=page_index,
                                      printed_page_label=page.get("printed_page_label"))],

@@ -28,7 +28,7 @@ import pytest
 from tools import db
 from tools.build_structure import build_structure
 from tools.classify_document import classify
-from tools.ingest_document import extract_pages, register_document
+from tools.ingest_document import _page_content_status, extract_pages, register_document
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CRIB_DIR = REPO_ROOT / "Table - PDF"
@@ -264,6 +264,18 @@ def test_placeholder_pages_detected_in_typology_catalogue():
     assert 30 <= wip <= 45, f"expected ~37 WIP-stamped pages, got {wip}"
     assert 90 <= non_real <= 140, f"expected roughly 90-140 non-real pages, got {non_real}"
     assert doc_status == "mixed", "a document that's ~1/3 placeholder must be flagged 'mixed'"
+
+
+def test_short_page_with_literal_lorem_ipsum_is_flagged():
+    """The word-fraction rule needs _LOREM_MIN_WORDS (150) words to fire, so a
+    short page can slip under it -- but if it says 'lorem ipsum' outright,
+    that's not ambiguous regardless of length. This was generic.py's job
+    (PLACEHOLDER_RE) before that detector was folded into this one; ingest
+    must catch it too, since generic.py now only obeys content_status rather
+    than re-deriving it."""
+    text = "Lorem ipsum is placeholder text used here as a stand-in for the real copy."
+    assert len(text.split()) < 150
+    assert _page_content_status(text) == "lorem"
 
 
 def test_extract_pages_never_raises_and_is_idempotent():
