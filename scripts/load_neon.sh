@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-# Move the local corpus into a Neon project.
+# Provision a Neon project from the local database: roles, schema, data.
+#
+# This is the STAND-IT-UP script, not the keep-it-current one. It drops the
+# schema and restores a full dump, which is right for a first load or a
+# rebuild and much too big for the thing that actually keeps happening --
+# local dev moves on and Neon does not. For that, `python3 -m tools.sync_neon
+# --push` replaces the corpus rows alone: no DDL, no roles, no passwords,
+# nothing to re-copy into Vercel afterwards. Run --check first either way.
 #
 # Reads NEON_ADMIN_URL from .env (gitignored). Nothing here echoes a
 # connection string or a generated password to stdout -- passwords are written
@@ -44,17 +51,43 @@ PG pg_dump --version
 PG psql "$DIRECT_URL" -tAc "select version()" | cut -c1-40
 
 say "2/6  roles"
-APP_PW=$(openssl rand -hex 24); READ_PW=$(openssl rand -hex 24); AUTH_PW=$(openssl rand -hex 24)
+# Rotating on every run is a trap, not a precaution. A data reload has no
+# reason to change a credential, and each rotation leaves Vercel holding a
+# password that no longer works until someone copies four strings across by
+# hand. On 2026-09-08 nobody did, and the failure surfaced days later as a
+# sign-in screen telling the owner their own account was not on the allowlist
+# -- the lookup could not connect at all. So: set passwords when a role is
+# being CREATED here (there is no other way to learn one), or when --rotate
+# says to mean it. Otherwise leave all three alone and say so.
+ROTATE=""
+# `case`, not `[ ... ] && ROTATE=yes`: under `set -e` that leaves the loop with
+# the exit status of the last failed test, which kills the script whenever the
+# final argument is not --rotate.
+for arg in "$@"; do case "$arg" in --rotate) ROTATE=yes ;; esac; done
+MISSING=$(PG psql "$DIRECT_URL" -tAc \
+  "select count(*) from (values ('arch_app'),('arch_read'),('arch_auth')) v(n)
+    where not exists (select 1 from pg_roles where rolname = v.n)" | tr -d ' ')
+if [ "$MISSING" != "0" ] || [ -n "$ROTATE" ]; then
+  SET_PW=yes
+  APP_PW=$(openssl rand -hex 24); READ_PW=$(openssl rand -hex 24); AUTH_PW=$(openssl rand -hex 24)
+else
+  SET_PW=""
+  echo "  all three roles exist -- passwords left as they are (--rotate to change them)"
+fi
 PG psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -q <<SQL
 DO \$\$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='arch_app')  THEN CREATE ROLE arch_app  LOGIN; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='arch_read') THEN CREATE ROLE arch_read LOGIN NOINHERIT; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='arch_auth') THEN CREATE ROLE arch_auth LOGIN NOINHERIT; END IF;
 END \$\$;
+SQL
+if [ -n "$SET_PW" ]; then
+  PG psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -q <<SQL
 ALTER ROLE arch_app  PASSWORD '$APP_PW';
 ALTER ROLE arch_read PASSWORD '$READ_PW';
 ALTER ROLE arch_auth PASSWORD '$AUTH_PW';
 SQL
+fi
 
 say "3/6  who may sign in -- saved before the reset, restored after"
 # `allowed_account` and `audit_log` belong to the ENVIRONMENT, not to a corpus
@@ -77,7 +110,11 @@ say "3/6  who may sign in -- saved before the reset, restored after"
 # BACK off the target needs something without a version gate, and psql's \copy
 # is just a query.
 ACCESS_DIR=$(mktemp -d -t arch_access) || exit 1
-trap 'rm -rf "$ACCESS_DIR"' EXIT          # it holds email addresses
+# One trap for both temporaries. `trap ... EXIT` REPLACES the previous handler
+# rather than adding to it, so the .env rewrite's trap further down used to
+# silently cancel this one and leave a directory of email addresses in /tmp.
+ENV_TMP=".env.tmp.$$"
+trap 'rm -rf "$ACCESS_DIR"; rm -f "$ENV_TMP"' EXIT
 ACCESS_TABLES="allowed_account audit_log"
 SAVED_ANY=""
 for t in $ACCESS_TABLES; do
@@ -173,8 +210,12 @@ DBN=$(printf '%s' "$DIRECT_URL" | sed -E 's|.*/([^?]+)(\?.*)?$|\1|')
 # The temp name matches .gitignore's `.env.*` so it can never be committed, and
 # the trap removes it on any exit, because it would otherwise fail
 # scripts/check_wat.py, which allows exactly five env files by name.
-ENV_TMP=".env.tmp.$$"
-trap 'rm -f "$ENV_TMP"' EXIT
+if [ -z "$SET_PW" ]; then
+  say "done -- corpus reloaded; .env untouched because no password changed"
+  echo "  the four NEON_* strings already in .env and in Vercel still work"
+  exit 0
+fi
+
 if [ -f .env ]; then
   grep -vE '^(NEON_DATABASE_URL|NEON_DATABASE_URL_READONLY|NEON_AUTH_DB_URL|NEON_DIRECT_URL_ARCH_APP)=' .env > "$ENV_TMP" || true
   mv "$ENV_TMP" .env

@@ -85,7 +85,8 @@ and finding that out on the second database is finding it out too late.
 | `db/test_account.sql` | the one allowlist row the write tests need |
 | `db/roles.sql` | `arch_read` (MCP) and `arch_auth` (sign-in lookup) |
 | `db/test_schema.sh` | asserts the access rules hold |
-| `scripts/load_neon.sh` | migrate a loaded local database to Neon |
+| `scripts/load_neon.sh` | stand a Neon project up: roles, schema, first load |
+| `tools/sync_neon.py` | compare Neon against local, and refresh its rows |
 | `tools/manage_allowlist.py` | who may sign in |
 
 ## Three roles, and why
@@ -150,9 +151,39 @@ this catches.
 
 ## Neon
 
+Two jobs, two tools, and reaching for the wrong one is what went wrong twice.
+
 ```sh
-./scripts/load_neon.sh
+python3 -m tools.sync_neon --check          # is Neon behind? read-only
+python3 -m tools.sync_neon --push --yes     # bring its rows up to date
+./scripts/load_neon.sh                      # first load, or a rebuild
 ```
+
+**Keeping it current is `tools/sync_neon.py`.** It replaces the corpus rows and
+nothing else: no DDL, so the schema, views, grants and RLS policies on the
+target are not in play; no roles and no passwords, so nothing has to be
+re-copied into Vercel and no deployment goes stale behind it; and
+`allowed_account` / `audit_log` are outside every list it builds. It runs as
+one transaction whose last act before COMMIT is comparing what it just wrote
+against the source, so a push that would leave any row differing rolls back
+instead.
+
+**Standing one up is `scripts/load_neon.sh`.** Roles, `DROP SCHEMA`, full
+restore. Right for an empty project or a rebuild, far too big for a data gap —
+and it is the one that rotates credentials.
+
+`--check` before either, and after. It compares the two schemas column by
+column, the view layer definition by definition, and then every row of every
+corpus table as an order-independent md5 — which is the point:
+
+> Neon's counts matched local dev on every table while 21 printed page labels,
+> 205 draft items and 3 document version labels did not. `load_neon.sh` step
+> 6/6 compares seven counts, so it called that load clean. **A row count cannot
+> see a value.** `--check` exits 1 on any difference, so it also works as a
+> gate before a deploy.
+
+If `--check` reports SCHEMA or VIEW drift, `--push` will refuse: a data-only
+push cannot add a column. Apply the migration to every database as above first.
 
 Four failures worth not repeating:
 
@@ -167,6 +198,21 @@ Four failures worth not repeating:
   them.** Reset the schema explicitly instead.
 
 Verify by comparing row counts per table, not just that the load exited zero.
+
+### A reload is not the way to close a data gap
+
+`load_neon.sh` rotates all three role passwords, and Vercel does not learn them
+by itself. Running it to fix stale rows therefore breaks the deployment as a
+side effect, and the break does not look like a credential problem: on
+2026-09-08 the sign-in page told the owner their own Google account was not on
+the allowlist, because `arch_auth` could not connect at all to check. Two
+accounts were added chasing that message before anyone looked at the
+connection.
+
+It now sets passwords only when it is CREATING a role — the one case where
+there is no other way to learn one — or when you pass `--rotate` to mean it.
+When it changes nothing it leaves `.env` alone and says so. But the better
+answer is not to run it for rows at all: that is what `--push` is for.
 
 ### load_neon.sh is a reload, not a migration
 
