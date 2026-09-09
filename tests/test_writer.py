@@ -273,6 +273,38 @@ def _checks() -> list[tuple[str, bool, str]]:
     return results
 
 
+def test_a_bare_code_does_not_overwrite_a_real_criterion_heading() -> None:
+    """One framework, two documents, one of them coded-only.
+
+    A criterion's real heading and its bare code arrive from different volumes
+    of the same framework: the coded appendix tables carry `CC1.1` as both the
+    code and the title, the narrative volume carries the sentence. Whichever
+    document was re-extracted last used to win, and on 2026-09-09 that cost 37
+    of 62 criteria their headings -- visible only as five keyword facets going
+    quietly missing, because facet classification reads those headings.
+    """
+    fw = f"{SLUG}-title-fw"
+    with db.transaction() as conn:
+        document_id = _ensure_document(conn)
+        # the narrative volume: code and heading
+        write_extraction(conn, document_id, Extraction(
+            frameworks=[{"slug": fw, "name": "Title precedence framework"}],
+            criteria=[{"framework_slug": fw, "code": "CC1.1",
+                       "title_primary": "Minimum percentage of population within 400m"}]))
+        # the coded appendix: the code, restated as the title
+        write_extraction(conn, document_id, Extraction(
+            frameworks=[{"slug": fw, "name": "Title precedence framework"}],
+            criteria=[{"framework_slug": fw, "code": "CC1.1", "title_primary": "CC1.1"}]))
+        title = db.scalar(
+            conn,
+            """SELECT title_primary FROM criterion cr JOIN framework f ON f.id = cr.framework_id
+                WHERE f.slug = %s AND cr.code = %s""",
+            (fw, "CC1.1"),
+        )
+    assert title == "Minimum percentage of population within 400m", (
+        f"a title that only restates the code overwrote a real heading: {title!r}")
+
+
 def test_roundtrip() -> None:
     """pytest entry point."""
     results = _checks()

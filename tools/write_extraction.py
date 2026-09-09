@@ -494,8 +494,22 @@ def _upsert_criteria(conn: psycopg.Connection, rows: list[dict],
             if existing:
                 cid = existing["id"]
                 conn.execute(
+                    # NULLIF against the code, not just COALESCE against NULL.
+                    # A criterion's real heading and its bare code arrive from
+                    # different documents of the same framework -- the coded
+                    # appendix tables carry `CC1.1` as both code and title, the
+                    # narrative volume carries "Minimum percentage (%%) of
+                    # population residing...". `compliance_table._ensure_criterion`
+                    # already upgrades a code-as-title placeholder, but only
+                    # within one extraction; across documents the last one
+                    # written simply won, so 37 of 62 criteria lost their
+                    # headings to whichever volume happened to be re-extracted
+                    # last. Facet classification reads those headings, so the
+                    # visible symptom was five keyword facets quietly going
+                    # missing. A title that only restates the code is not an
+                    # improvement on one that does not.
                     """UPDATE criterion SET
-                         title_primary = COALESCE(%s, title_primary),
+                         title_primary = COALESCE(NULLIF(%s, code), title_primary),
                          title_alt     = COALESCE(%s, title_alt),
                          ordinal       = COALESCE(%s, ordinal),
                          parent_id     = COALESCE(%s, parent_id),
