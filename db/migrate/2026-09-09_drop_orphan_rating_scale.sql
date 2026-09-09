@@ -1,6 +1,8 @@
 -- Drop the duplicate smart-city rating ladder.
 --
--- Applied to: pending — not yet applied to any database.
+-- Applied to: local dev, arch_test, Neon (2026-09-09, on the direct endpoint
+--   with -pooler stripped). Re-applied to each afterwards to confirm the
+--   second run is a notice and no rows.
 --
 -- One four-rung ladder (None / Minimal / Significant / Transformational) exists
 -- twice in rating_scale. `smart-city-contribution` is seeded by db/seed.sql and
