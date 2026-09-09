@@ -185,6 +185,35 @@ every database as above, and treat `load_neon.sh` as the thing you run to move
 **no views**, so it cannot tell you the view layer survived — check that
 separately, or run `./db/test_schema.sh --existing`.
 
+### It carries the allowlist across the reset, and did not always
+
+`allowed_account` and `audit_log` belong to the **environment**, not to the
+corpus snapshot. Every other table here is "make Neon look like local dev", and
+for those two that is exactly backwards: local dev's allowlist is a single
+placeholder row — `dev@local`, no `google_sub`, unusable for sign-in — so
+restoring it over production replaces the real accounts with one nobody can log
+in as. On 2026-09-08 that locked the owner out of their own deployment, and the
+`audit_log` that would have said which addresses had been granted access was
+overwritten in the same pass, so it could not be read back.
+
+The script now dumps both tables off the target *before* `DROP SCHEMA` and
+restores them after, and passes `--exclude-table-data` (never
+`--exclude-table` — the tables must still be created, or the app has nowhere to
+look them up) so local dev's rows never travel. Two things follow:
+
+- **The allowlist is deliberately not row-compared** in the verification step.
+  It is the one place the two databases are supposed to disagree, so comparing
+  it would report the correct outcome as a failure. It prints the surviving
+  count instead.
+- **A load onto a target that never had an allowlist leaves it without one.**
+  The script says so rather than letting you find out at the sign-in screen.
+  `tools/manage_allowlist.py add <email> --role owner` is the only fix.
+
+The wider rule: before running anything that replaces a database wholesale, ask
+which tables describe *this environment* rather than the corpus. Access control
+is the expensive one to get wrong, because the failure mode is being locked out
+of the thing you were deploying.
+
 ## Access
 
 ```sh

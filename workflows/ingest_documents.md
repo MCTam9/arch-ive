@@ -400,6 +400,16 @@ Each document therefore gets `pipeline.ENRICHMENTS` in order and then
 sequence a fresh ingest runs. Pass `--no-embed` to defer the last step, and run
 `python3 -m tools.embed_chunks` yourself afterwards.
 
+**It refuses a pass that would discard review decisions.** `write_extraction`
+clears a document's prior knowledge items and writes new rows with new ids, so
+`review_status` and `reviewed_by` go with them — there is nothing to carry
+forward to, and no undo. This used to be a counted note in the dry run
+(`resets N review decision(s)`), which on 2026-09-08 was printed, skimmed, and
+cost 771 approvals; `audit_log` still holds the `review:approved` rows, every
+one of them now pointing at an item id that no longer exists. A number in
+output nobody reads is not a safeguard. Pass `--allow-review-reset` to mean it.
+One refused document does not cost the others their pass.
+
 Two things it cannot rebuild, and both are reasons to read the dry run first:
 
 - **Human review decisions.** `review_status` and `reviewed_by` are columns on

@@ -326,6 +326,18 @@ def _would_empty(entry: dict) -> bool:
                 and entry["before"]["items"] > 0)
 
 
+def _would_reset_reviews(entry: dict) -> bool:
+    """A pass that would throw away human review decisions.
+
+    `write_extraction` clears a document's prior knowledge items and writes new
+    rows with new ids, so `review_status` and `reviewed_by` go with them --
+    there is nothing to carry forward to. On 2026-09-08 a corpus pass discarded
+    771 approvals this way. The dry run had counted them; a count in output
+    somebody skims is not a safeguard, so this refuses instead.
+    """
+    return bool(entry["extraction"] is not None and entry["before"]["reviewed"] > 0)
+
+
 def _reset_account(conn) -> None:
     """Re-apply the RLS account after a rollback.
 
@@ -370,7 +382,8 @@ def sync_metadata(conn, work: list[dict]) -> dict:
     }
 
 
-def apply(conn, work: list[dict], *, allow_empty: bool = False, embed: bool = True) -> dict:
+def apply(conn, work: list[dict], *, allow_empty: bool = False,
+          allow_review_reset: bool = False, embed: bool = True) -> dict:
     """Rewrite each planned document: writer, enrichments, embedder.
 
     One transaction per document, committed before the next one starts, so a
@@ -398,6 +411,12 @@ def apply(conn, work: list[dict], *, allow_empty: bool = False, embed: bool = Tr
             result["status"] = "refused"
             result["detail"] = (f"extractor returned 0 items, {entry['before']['items']} in the "
                                 f"database; pass --allow-empty if that is intended")
+            continue
+        if _would_reset_reviews(entry) and not allow_review_reset:
+            result["status"] = "refused"
+            result["detail"] = (f"would discard {entry['before']['reviewed']} human review "
+                                f"decision(s), which nothing can restore; pass "
+                                f"--allow-review-reset if that is intended")
             continue
 
         document_id, slug = entry["document_id"], entry["slug"]
@@ -514,7 +533,8 @@ def _print_plan(work: list[dict]) -> None:
             if _would_empty(e):
                 notes.append("REFUSED: 0 items (--allow-empty to override)")
             if before["reviewed"]:
-                notes.append(f"resets {before['reviewed']} review decision(s)")
+                notes.append(f"REFUSED: resets {before['reviewed']} review decision(s) "
+                             f"(--allow-review-reset to override)")
             if pred["warnings"]:
                 notes.append(f"{pred['warnings']} extractor warning(s)")
             note = "; ".join(notes)
@@ -536,6 +556,9 @@ def main() -> int:
                          "that currently has some")
     ap.add_argument("--no-embed", action="store_true",
                     help="leave rewritten chunks unembedded; run tools.embed_chunks after")
+    ap.add_argument("--allow-review-reset", action="store_true",
+                    help="write even where it discards human review decisions; nothing "
+                         "restores them")
     ap.add_argument("--metadata-only", action="store_true",
                     help="apply private/documents.yaml to source_document and stop -- no "
                          "re-extraction, no reset review decisions")
@@ -574,7 +597,9 @@ def main() -> int:
 
         _print_plan(work)
 
-        refused = [e for e in work if _would_empty(e) and not args.allow_empty]
+        refused = [e for e in work
+                   if (_would_empty(e) and not args.allow_empty)
+                   or (_would_reset_reviews(e) and not args.allow_review_reset)]
         skipped = [e for e in work if e["skip"]]
         print(f"\nreextract: {len(work) - len(refused) - len(skipped)} to rewrite, "
               f"{len(skipped)} skipped, {len(refused)} refused")
@@ -583,7 +608,9 @@ def main() -> int:
             print("rewritten in place for each document above; pass --yes to write")
             return 0
 
-        report = apply(conn, work, allow_empty=args.allow_empty, embed=not args.no_embed)
+        report = apply(conn, work, allow_empty=args.allow_empty,
+                       allow_review_reset=args.allow_review_reset,
+                       embed=not args.no_embed)
 
     print()
     for r in report["documents"]:

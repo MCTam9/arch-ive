@@ -250,6 +250,54 @@ def test_the_rls_account_survives_a_rollback(corpus, monkeypatch):
         assert db.scalar(conn, "SELECT count(*) FROM source_document") > 0
 
 
+
+
+def test_a_pass_that_would_discard_review_decisions_is_refused(corpus, monkeypatch):
+    """The failure this exists to not repeat.
+
+    `write_extraction` clears a document's prior items and writes new rows with
+    new ids, so `review_status` goes with them and nothing carries forward. On
+    2026-09-08 a corpus pass discarded 771 approvals; the dry run had counted
+    them in a line nobody read. A count is not a safeguard.
+    """
+    _stub_registry(monkeypatch, {SLUG_A: _extraction(2), SLUG_B: _extraction(2)})
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE knowledge_item SET review_status = 'approved' WHERE document_id = %s",
+            (corpus["ids"][SLUG_A],),
+        )
+        conn.commit()
+
+    with db.connect() as conn:
+        work = reextract.plan(conn)
+        report = reextract.apply(conn, work, embed=False)
+    by_slug = {r["slug"]: r for r in report["documents"]}
+    assert by_slug[SLUG_A]["status"] == "refused"
+    assert "review decision" in by_slug[SLUG_A]["detail"]
+    assert by_slug[SLUG_B]["status"] == "ok", "one refusal must not cost the others their pass"
+
+    with db.connect() as conn:
+        still = db.scalar(
+            conn,
+            "SELECT count(*) FROM knowledge_item WHERE document_id = %s AND review_status = 'approved'",
+            (corpus["ids"][SLUG_A],),
+        )
+    assert still == 2, "the refused document keeps its decisions"
+
+
+def test_allow_review_reset_is_the_way_to_mean_it(corpus, monkeypatch):
+    _stub_registry(monkeypatch, {SLUG_A: _extraction(2), SLUG_B: _extraction(2)})
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE knowledge_item SET review_status = 'approved' WHERE document_id = %s",
+            (corpus["ids"][SLUG_A],),
+        )
+        conn.commit()
+    with db.connect() as conn:
+        work = reextract.plan(conn)
+        report = reextract.apply(conn, work, allow_review_reset=True, embed=False)
+    assert {r["slug"]: r["status"] for r in report["documents"]}[SLUG_A] == "ok"
+
 # ── documents.yaml -> source_document ────────────────────────────────────────
 #
 # Every extractor reads `ctx.meta`, which comes from private/documents.yaml, so
