@@ -149,6 +149,14 @@ explicit exemption list. A view defaults to `security_definer` and then serves
 every row to anonymous callers — that happened here, looked fine, and is what
 this catches.
 
+`--existing` means "use this empty Postgres instead of starting a container".
+It is not a way to inspect a database that already holds something: the script
+applies `db/schema.sql` to whatever `DB` names, so pointing it at Neon is a
+write attempt, not a check. It aborts on the first object that already exists,
+having got as far as `CREATE EXTENSION IF NOT EXISTS`. To ask the same question
+of a live database, `python3 -m tools.sync_neon --check` compares every view's
+definition and its `security_invoker` setting against local, read-only.
+
 ## Neon
 
 Two jobs, two tools, and reaching for the wrong one is what went wrong twice.
@@ -228,8 +236,8 @@ way. Two consequences that are easy to get wrong in opposite directions:
 So: land the change in `db/schema.sql` and a `db/migrate/` file, apply it to
 every database as above, and treat `load_neon.sh` as the thing you run to move
 *rows*, not schema. The row-count comparison it prints covers seven tables and
-**no views**, so it cannot tell you the view layer survived — check that
-separately, or run `./db/test_schema.sh --existing`.
+**no views**, so it cannot tell you the view layer survived — run
+`python3 -m tools.sync_neon --check` after it, which does compare them.
 
 ### It carries the allowlist across the reset, and did not always
 
