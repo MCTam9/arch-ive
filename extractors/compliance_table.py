@@ -60,12 +60,43 @@ from tools.pipeline import Citation, DocumentContext, Extraction, Item, Node, re
 FRAMEWORK_SLUG = "masterplan-sustainability"
 # The ladder this framework is graded against is the one seeded in db/seed.sql,
 # named here rather than minted here -- see workflows/add_extractor.md. It has
-# to be named even though this module assigns no level to any requirement,
-# because framework.rating_scale_id is what the web matrix reads to work out
-# which level columns exist: with it NULL, all 62 of this framework's criteria
-# rendered as "Nothing in this sheet" (commit 5aa42dc treated that in the UI
-# without asking why the framework had no scale).
-RATING_SCALE_SLUG = "smart-city-contribution"
+# to be named because framework.rating_scale_id is what the web matrix reads to
+# work out which level columns exist: with it NULL, all 62 of this framework's
+# criteria rendered as "Nothing in this sheet" (commit 5aa42dc treated that in
+# the UI without asking why the framework had no scale).
+#
+# It is `framework-targets`, read off the volume itself rather than picked by
+# resemblance. The document's own glossary defines a target as identifiable
+# "into three levels: baseline (business-as-usual), stretch or aspirational,
+# and pioneering" -- which is exactly the seeded framework-targets ladder, and
+# is why that scale was seeded. An earlier revision of this line named
+# `smart-city-contribution` instead; that ladder belongs to a different volume
+# (see extractors/smart_city.py) and none of its four level names -- None,
+# Minimal, Significant, Transformational -- occurs even once across the 195
+# pages of the two volumes this extractor reads.
+RATING_SCALE_SLUG = "framework-targets"
+
+# Every requirement in both volumes is printed under the label MINIMUM TARGET
+# (44 pages carry it) or in an appendix whose three columns are strategy code,
+# compliance requirement and TARGET -- the mandatory floor the framework text
+# calls "minimum targets that are mandatory". No stretch or pioneering value is
+# printed against any strategy anywhere in the corpus: the words appear only in
+# the glossary that defines them. So the level is not something to parse out of
+# a column -- there is no such column -- it is uniform, and it is the bottom
+# rung. Should a later volume publish the other two tiers per strategy, this is
+# the constant that stops being a constant.
+BASELINE_ORDINAL = 1
+BASELINE_LEVEL_REF = f"{RATING_SCALE_SLUG}-{BASELINE_ORDINAL}"
+
+# Seeded in db/seed.sql; declared here too because tools/write_extraction.py
+# resolves a requirement's rating_level_id only through refs this extraction
+# declares, and its upsert is ON CONFLICT DO UPDATE with COALESCE, so naming
+# the seeded rows again cannot overwrite them.
+RATING_LEVELS = (
+    (1, "baseline", "Baseline"),
+    (2, "stretch", "Stretch"),
+    (3, "pioneering", "Pioneering"),
+)
 
 CODE_RE = re.compile(r"^([A-Z]{2,3})(\d)\.(\d)$")
 PRINCIPLE_RE = re.compile(r"^([A-Z ,&/-]+?)\s*\[([A-Z]{2,3})\]\s*$")
@@ -135,6 +166,14 @@ class ComplianceTableExtractor:
         ext.nodes.append(Node(node_kind="volume", title=ctx.slug, ordinal=0,
                                page_from=1, page_to=len(doc), ref=root_ref))
 
+        ext.rating_scales.append({"ref": RATING_SCALE_SLUG, "slug": RATING_SCALE_SLUG,
+                                   "name": "Framework target tiers"})
+        for ordinal, code, name in RATING_LEVELS:
+            ext.rating_levels.append({
+                "ref": f"{RATING_SCALE_SLUG}-{ordinal}", "scale_ref": RATING_SCALE_SLUG,
+                "ordinal": ordinal, "code": code, "name": name,
+                "description": None, "colour": None,
+            })
         ext.frameworks.append({
             "ref": FRAMEWORK_SLUG, "slug": FRAMEWORK_SLUG,
             "name": "Masterplan sustainability framework", "owner_org_id": None,
@@ -357,7 +396,7 @@ class ComplianceTableExtractor:
                     payload={
                         "requirement_kind": "compliance",
                         "criterion_id": f"crit-{col0}",
-                        "rating_level_id": None, "metric_id": None,
+                        "rating_level_id": BASELINE_LEVEL_REF, "metric_id": None,
                         "target_value": target_value, "target_text": target_text,
                         "unit_id": unit[0] if unit else None,
                         "comparator": comparator,
@@ -475,7 +514,8 @@ class ComplianceTableExtractor:
                     citations=[Citation(page_index=page_index + 1)],
                     payload={
                         "requirement_kind": "graded" if kind == "kpi" else "compliance",
-                        "criterion_id": f"crit-{code}", "rating_level_id": None,
+                        "criterion_id": f"crit-{code}",
+                        "rating_level_id": None if kind == "kpi" else BASELINE_LEVEL_REF,
                         "metric_id": None, "target_value": target_value,
                         "target_text": value_text,
                         "unit_id": parsed.unit_id if parsed else None,

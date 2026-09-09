@@ -225,14 +225,16 @@ PATTERN_KIND_SCALE: dict[str, str] = {
 # plus a "None" rung that means "not aligned" rather than "baseline ambition" --
 # that rung is omitted, not squeezed into baseline.
 #
-# The smart-city row has never fired, and attaching that scale to
-# masterplan-sustainability (2026-09-09) does not change it. The lookup below
-# reads a requirement's own rating_level_id, and all 64 of that framework's
-# requirements have it NULL because extractors/compliance_table.py assigns no
-# level to anything it extracts. The scale gives the matrix its level columns;
-# it fills no cell. This map starts mattering when an extractor learns to read a
-# level per requirement, and not before -- until then these items fall through
-# to the keyword pass, which is why the facet counts look sane despite it.
+# The `framework-targets` row fires on ordinal 1 only, for all 64 of
+# masterplan-sustainability's requirements: the volumes print one tier per
+# strategy, the mandatory minimum, and never a stretch or pioneering value
+# (extractors/compliance_table.py explains the reading). Ordinals 2 and 3 are
+# here for the day one does. Before 2026-09-09 that framework was wired to
+# `smart-city-contribution` with every rating_level_id NULL, so no row of this
+# map fired for it at all and those items fell through to the keyword pass.
+#
+# The smart-city row has still never fired: extractors/smart_city.py records
+# the ladder's rungs as items, and assigns no rung to a requirement.
 #
 # A fourth key, `smart-city-alignment-ladder`, was removed with the duplicate
 # scale itself (db/migrate/2026-09-09_drop_orphan_rating_scale.sql).

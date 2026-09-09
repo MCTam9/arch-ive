@@ -234,6 +234,36 @@ def test_compliance_table_appendix_has_43_unique_strategy_codes():
             assert target != ""
 
 
+def test_compliance_table_grades_against_the_scale_the_volume_defines():
+    """The volumes define a target as baseline / stretch / pioneering and print
+    only the mandatory minimum, so every compliance requirement is graded, and
+    graded at the bottom rung. This once read `smart-city-contribution` -- a
+    ladder from a different volume whose level names occur nowhere in these two
+    -- and every requirement came back unlevelled.
+
+    The ref has to be one this extraction also declares: tools/write_extraction
+    resolves rating_level_id only through that map, so a ref naming a level the
+    extraction never emits resolves to NULL without complaint, which is exactly
+    the failure this guards."""
+    path = _find_by_marker_anywhere(_framework_files(), "compliance requirements checklist")
+    if path is None:
+        pytest.skip("no framework volume sniffed as carrying the compliance appendix")
+    ctx = _build_ctx("test-framework-e2", path, "implementation_plan")
+    ext = COMPLIANCE_TABLE.extract(ctx)
+
+    assert [f["rating_scale_ref"] for f in ext.frameworks] == ["framework-targets"]
+    declared = {lv["ref"]: lv for lv in ext.rating_levels}
+    assert declared["framework-targets-1"]["ordinal"] == 1
+
+    graded = [it for it in ext.items
+               if it.payload.get("requirement_kind") == "compliance"]
+    assert graded, "expected compliance requirements from the appendix"
+    for it in graded:
+        ref = it.payload["rating_level_id"]
+        assert ref in declared, f"unresolvable rating_level_id {ref!r}"
+        assert declared[ref]["code"] == "baseline"
+
+
 def test_compliance_table_never_fails_on_a_document_without_the_appendix():
     """framework-vol-a10-smart-city (and framework-vol-e1's narrative body)
     have no ruled compliance appendix -- the extractor must degrade to a

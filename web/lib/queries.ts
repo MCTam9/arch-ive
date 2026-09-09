@@ -852,6 +852,11 @@ export type MatrixRow = {
   // key nothing ever looked up, so a whole framework without a rating scale
   // (masterplan-sustainability: 64 of 64 requirements) rendered as an empty
   // sheet. They are collected here instead, and the page gives them a column.
+  //
+  // That framework is no longer the example: it has been wired to the ladder
+  // its own volumes define and all 64 now sit at a level. This stays because
+  // nullable means nullable — an extractor that reads a code it cannot grade
+  // still has somewhere to put it, and the column appears only when used.
   unassigned: MatrixCell[];
 };
 
