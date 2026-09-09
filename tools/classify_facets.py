@@ -221,13 +221,24 @@ PATTERN_KIND_SCALE: dict[str, str] = {
 
 # rating_scale.slug -> {rating_level.ordinal: level term}. The crib sheets'
 # own four-rung ladder (L1..L4, the top rung literally labelled "EXEMPLAR
-# PERFORMANCE") maps cleanly 1:1. The two masterplan-framework ladders have
-# three graded rungs plus a "None" rung that means "not aligned" rather than
-# "baseline ambition" -- that rung is omitted, not squeezed into baseline.
+# PERFORMANCE") maps cleanly 1:1. The smart-city ladder has three graded rungs
+# plus a "None" rung that means "not aligned" rather than "baseline ambition" --
+# that rung is omitted, not squeezed into baseline.
+#
+# The smart-city row has never fired, and attaching that scale to
+# masterplan-sustainability (2026-09-09) does not change it. The lookup below
+# reads a requirement's own rating_level_id, and all 64 of that framework's
+# requirements have it NULL because extractors/compliance_table.py assigns no
+# level to anything it extracts. The scale gives the matrix its level columns;
+# it fills no cell. This map starts mattering when an extractor learns to read a
+# level per requirement, and not before -- until then these items fall through
+# to the keyword pass, which is why the facet counts look sane despite it.
+#
+# A fourth key, `smart-city-alignment-ladder`, was removed with the duplicate
+# scale itself (db/migrate/2026-09-09_drop_orphan_rating_scale.sql).
 RATING_LEVEL_ORDINAL: dict[str, dict[int, str]] = {
     "crib-levels": {1: "level.baseline", 2: "level.enhanced", 3: "level.best_practice", 4: "level.exemplar"},
     "framework-targets": {1: "level.baseline", 2: "level.enhanced", 3: "level.exemplar"},
-    "smart-city-alignment-ladder": {1: "level.baseline", 2: "level.enhanced", 3: "level.exemplar"},
     "smart-city-contribution": {2: "level.baseline", 3: "level.enhanced", 4: "level.exemplar"},
 }
 

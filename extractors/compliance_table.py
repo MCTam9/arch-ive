@@ -58,6 +58,14 @@ from extractors.support import clean, parse_value, slugify
 from tools.pipeline import Citation, DocumentContext, Extraction, Item, Node, register
 
 FRAMEWORK_SLUG = "masterplan-sustainability"
+# The ladder this framework is graded against is the one seeded in db/seed.sql,
+# named here rather than minted here -- see workflows/add_extractor.md. It has
+# to be named even though this module assigns no level to any requirement,
+# because framework.rating_scale_id is what the web matrix reads to work out
+# which level columns exist: with it NULL, all 62 of this framework's criteria
+# rendered as "Nothing in this sheet" (commit 5aa42dc treated that in the UI
+# without asking why the framework had no scale).
+RATING_SCALE_SLUG = "smart-city-contribution"
 
 CODE_RE = re.compile(r"^([A-Z]{2,3})(\d)\.(\d)$")
 PRINCIPLE_RE = re.compile(r"^([A-Z ,&/-]+?)\s*\[([A-Z]{2,3})\]\s*$")
@@ -130,7 +138,8 @@ class ComplianceTableExtractor:
         ext.frameworks.append({
             "ref": FRAMEWORK_SLUG, "slug": FRAMEWORK_SLUG,
             "name": "Masterplan sustainability framework", "owner_org_id": None,
-            "version": None, "rating_scale_ref": None, "document_ref": None,
+            "version": None, "rating_scale_ref": RATING_SCALE_SLUG,
+            "document_ref": None,
         })
 
         principles: dict[str, str] = {}   # 'NF' -> full principle name

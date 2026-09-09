@@ -50,7 +50,14 @@ from tools.pipeline import Citation, DocumentContext, Extraction, Item, Node, Re
 
 DOC_KINDS = ("solutions_framework",)
 
-RATING_SCALE_SLUG = "smart-city-alignment-ladder"
+# The four rungs this report grades a solution's contribution on. They are the
+# seeded `smart-city-contribution` scale in db/seed.sql, which is also what the
+# twelve rating_level_crosswalk rows and tools/classify_facets.py are keyed on.
+# This module used to append a second scale of its own,
+# `smart-city-alignment-ladder`, carrying the same four rungs under a different
+# slug and ordinals starting at 0 -- a parallel vocabulary nothing referenced,
+# dropped by db/migrate/2026-09-09_drop_orphan_rating_scale.sql. An extractor
+# names a seeded scale; it does not mint one.
 LADDER_LEVELS = ("None", "Minimal", "Significant", "Transformational")
 
 # Main body printed pagination: 1 landscape PDF page = 2 printed pages,
@@ -245,17 +252,6 @@ class SmartCityExtractor:
 
     def _extract_ladder(self, ctx: DocumentContext, doc: pymupdf.Document, ex: Extraction,
                          node_ref_by_code: dict[str, str], content_status: str) -> int:
-        ex.rating_scales.append({
-            "slug": RATING_SCALE_SLUG,
-            "name": "Sustainability principle contribution ladder",
-        })
-        for ordinal, level_name in enumerate(LADDER_LEVELS):
-            ex.rating_levels.append({
-                "scale_slug": RATING_SCALE_SLUG, "ordinal": ordinal,
-                "code": level_name[:4].upper(), "name": level_name,
-                "description": None, "colour": None,
-            })
-
         seen: dict[str, list[Citation]] = {}
         for page_index, page in enumerate(doc):
             text = page.get_text()
@@ -279,6 +275,10 @@ class SmartCityExtractor:
                 confidence=0.85,
                 citations=citations[:2],
                 payload={
+                    # A ladder row is the whole ladder -- it names all four
+                    # rungs at once as the scale a principle is graded on -- so
+                    # it sits at no single level and belongs to no one
+                    # criterion. Both stay None on purpose; neither is a gap.
                     "requirement_kind": "graded",
                     "criterion_id": None, "rating_level_id": None, "metric_id": None,
                     "target_value": None, "target_text": ", ".join(LADDER_LEVELS),

@@ -88,3 +88,28 @@ a separate database via `tests/conftest.py`; do not defeat that redirect.
 - **Flag placeholder content.** Lorem, `TEMPLATE ONLY` and `WIP` stamps set
   `content_status`. Serving placeholder text as guidance is this system's
   worst failure mode.
+- **Obey `content_status`, and share the rule if you check it twice.**
+  `extractors/support.py:page_is_real` reads what ingest decided and stored,
+  and most extractors should do only that. `generic.py` also re-checks the
+  page's own text, deliberately: it takes the documents nobody wrote a shape
+  for, so it is the one that meets a document ingest got wrong, and
+  `test_generic_marks_wip_page_as_skipped_when_upstream_missed_it` pins that.
+  What it must not do — and did — is re-check with a *different* rule. It
+  carried three-of-six stock Latin tokens against ingest's word-fraction test
+  above a 150-word floor. Both agreed on all 806 pages, which was luck rather
+  than design. `page_status_from_text` in `support.py` is now that rule, once,
+  and ingest and the extractor both reach it.
+- **Name a seeded rating scale; do not mint one.** `db/seed.sql` owns the
+  scales because they are shared vocabulary: `rating_level_crosswalk` is what
+  lets an "Exemplar" on one ladder compare with a "Transformational" on
+  another, and `RATING_LEVEL_ORDINAL` in `tools/classify_facets.py` is keyed on
+  the same slugs. `smart_city.py` appended a scale of its own carrying the same
+  four rungs under a second slug, ordinals starting at 0 instead of 1, and
+  nothing ever referenced it. An extractor that stops emitting a scale does not
+  remove it either — `_upsert_rating_scales` is `ON CONFLICT DO UPDATE` and
+  never deletes — so the cleanup is always a migration.
+- **A framework needs its `rating_scale_ref`.** It is what
+  `framework.rating_scale_id` becomes, and the web matrix reads that to work
+  out which level columns exist. `compliance_table.py` passed `None`, so all 62
+  criteria of `masterplan-sustainability` rendered as "Nothing in this sheet" —
+  a populated framework that read as an empty one.

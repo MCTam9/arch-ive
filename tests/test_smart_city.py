@@ -177,9 +177,12 @@ def test_extractor_end_to_end():
     assert by_code["2.1"].node_kind == "section"
 
     # -- the rating ladder ----------------------------------------------------
-    assert ex.rating_scales and ex.rating_scales[0]["slug"] == "smart-city-alignment-ladder"
-    level_names = [r["name"] for r in sorted(ex.rating_levels, key=lambda r: r["ordinal"])]
-    assert level_names == ["None", "Minimal", "Significant", "Transformational"]
+    # The ladder's four rungs are the seeded `smart-city-contribution` scale, so
+    # this extractor mints none of its own. It used to append a duplicate under
+    # a second slug, which nothing then referenced; pinned here because that
+    # duplicate is the regression.
+    assert ex.rating_scales == []
+    assert ex.rating_levels == []
 
     ladder_items = {it.title: it for it in ex.items if it.item_type == "requirement"}
     assert "Contribution ladder: alpha-test sustainability principle" in ladder_items

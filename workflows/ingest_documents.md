@@ -456,6 +456,18 @@ which stays a deliberate act with `tools/fetch_original.py` behind it.
 - **Re-running an extractor after improving it.** `write_extraction` is
   idempotent per document — it clears that document's prior knowledge items
   first. Use `--force <sha>` to re-run every stage for one job.
+- **An extractor that stops emitting a row does not delete it.** The
+  idempotence above is per *knowledge item*. `_upsert_rating_scales`,
+  `_upsert_rating_levels` and the framework upsert in
+  `tools/write_extraction.py` are all `INSERT ... ON CONFLICT (slug) DO UPDATE`
+  and never delete, so a rating scale an extractor has stopped minting survives
+  every future re-extract — looking, by then, exactly like one somebody meant
+  to seed. `smart-city-alignment-ladder` sat that way, duplicating a seeded
+  scale, referenced by nothing. Removing one is an explicit migration;
+  `db/migrate/2026-09-09_drop_orphan_rating_scale.sql` is the worked example,
+  including the guard that refuses to delete a scale anything still points at
+  and the check that fails loudly when RLS is hiding the table rather than
+  reporting the rows already gone.
 - **Zero items from a document.** Not automatically a bug. Check the persisted
   warnings before assuming so:
   ```sql
