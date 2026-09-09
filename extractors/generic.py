@@ -15,13 +15,16 @@ never "crash the extraction."
 Pages whose `content_status` is not "real" (lorem/template/wip stamps,
 already flagged upstream by whatever set ctx.pages[i]['content_status']) are
 skipped outright -- ingesting placeholder text as guidance would be worse
-than not ingesting it.
+than not ingesting it. The page's own text is then checked a second time,
+against `extractors.support.page_status_from_text`, for the page upstream
+never saw: this extractor takes the documents nobody wrote a shape for, so it
+is the one that meets a document ingest got wrong.
 """
 from __future__ import annotations
 
 import re
 
-from extractors.support import page_is_real
+from extractors.support import page_is_real, page_status_from_text
 from tools.pipeline import Citation, DocumentContext, Extraction, Item, Node, register
 
 MAX_STATEMENT_CHARS = 4000
@@ -111,10 +114,15 @@ class GenericExtractor:
             if page_index is None:
                 continue
             text = page.get("text") or ""
-            # content_status is decided once, by ingest, before any extractor
-            # runs; this one just obeys it rather than re-deriving its own
-            # verdict (see extractors/support.py:page_is_real).
-            if not page_is_real(page):
+            # Two checks, on purpose. `page_is_real` obeys what ingest already
+            # decided and stored; `page_status_from_text` asks the same
+            # question of the text again, for the page ingest never saw. This
+            # extractor is the one place a bad document cannot be allowed to
+            # look fine, and `test_generic_marks_wip_page_as_skipped_when_
+            # upstream_missed_it` is what says so. What is NOT duplicated any
+            # more is the rule: both this and ingest read the one in
+            # extractors/support.py, where a weaker local copy used to sit.
+            if not page_is_real(page) or page_status_from_text(text) != "real":
                 skipped += 1
                 continue
             if not text.strip():

@@ -247,3 +247,80 @@ def _parse_number(t: str) -> tuple[float | None, float | None, float | None,
 
 def _unit_or_none(raw: str) -> tuple[str, str] | None:
     return lookup_unit(raw) if raw else None
+
+
+# ── placeholder pages ────────────────────────────────────────────────────
+
+# The vocabulary shared by the classic 69-word Lorem Ipsum paragraph and the
+# longer "De Finibus" source text that generators (including InDesign's
+# built-in filler) draw random sentences from. A page is flagged on the
+# *fraction* of its words drawn from this set, not on any single phrase --
+# this corpus's filler text never contains "lorem" or "ipsum" itself.
+_LATIN_STOPWORDS = frozenset("""
+a ab ad adipisci adipiscing alias aliquam aliquid aliquip amet animi
+aperiam architecto asperiores aspernatur assumenda at atque aut autem
+beatae blanditiis cillum commodi commodo consectetur consequatur consequat
+consequuntur corporis corrupti culpa cum cumque cupiditate cupidatat
+debitis delectus deleniti deserunt dicta dignissimos distinctio
+do dolor dolore dolorem doloremque dolores doloribus dolorum duis
+ducimus ea eaque earum eius eiusmod eligendi elit enim eos
+error esse est et eu eum eveniet ex excepteur excepturi exercitation
+exercitationem expedita explicabo facere facilis fuga fugiat fugit harum
+hic id illo illum impedit in incididunt incidunt inventore ipsa ipsam
+ipsum irure iste itaque iure iusto labore laboris laboriosam laborum
+laudantium libero lorem magna magnam magni maiores maxime minim minima
+minus modi molestiae molestias mollit mollitia natus necessitatibus nemo
+neque nesciunt nihil nisi nobis non nostrud nostrum nulla numquam
+occaecat occaecati odio odit officia officiis omnis optio pariatur
+perferendis perspiciatis placeat porro possimus praesentium proident
+provident quae quaerat quam quas quasi qui quia quibusdam quidem
+quis quisquam quo quod quos ratione recusandae reiciendis rem repellat
+repellendus reprehenderit repudiandae rerum saepe sapiente sed sequi
+similique sint sit soluta sunt suscipit tempor tempora tempore
+temporibus tenetur totam ullam ullamco unde ut vel velit veniam
+veritatis vero vitae voluptas voluptate voluptatem voluptates voluptatibus
+voluptatum
+""".split())
+
+_LOREM_MIN_WORDS = 150
+_LOREM_FRACTION = 0.12
+
+_TEMPLATE_ONLY_RE = re.compile(r"template\s*\n?\s*only", re.IGNORECASE)
+_WIP_RE = re.compile(r"(?<!\w)WIP(?!\w)")
+# the literal phrase, for the generators (unlike this corpus's own filler)
+# that do spell it out -- a page can fall under the 150-word floor the
+# fraction rule needs and still be unambiguously lorem ipsum.
+_LOREM_STAMP_RE = re.compile(r"lorem\s+ipsum", re.I)
+_WORD_RE = re.compile(r"[a-z]+")
+
+
+def page_status_from_text(text: str) -> str:
+    """The `content_status` a page's own text argues for.
+
+    wip > template > lorem > real -- an explicit stamp beats a fuzzy match.
+
+    Two callers, which is why it lives here rather than in either of them.
+    `tools/ingest_document.py` runs it once per page at ingest and stores the
+    answer on `source_page`. `extractors/generic.py` runs it again over the
+    same text, because a page carrying `content_status = 'real'` that says WIP
+    is a document that ingest did not see, and that extractor is the one place
+    a bad document cannot be allowed to look fine -- serving placeholder text
+    as guidance is, per CONTRACT.md, this system's worst failure mode.
+
+    The second look used to be a *different*, weaker rule living in
+    `generic.py`: three of six stock Latin tokens, and no word-fraction test.
+    Two rules for one question is how a corpus ends up with two answers. This
+    is that rule, once, and both callers reach it.
+    """
+    if _WIP_RE.search(text):
+        return "wip"
+    if _TEMPLATE_ONLY_RE.search(text):
+        return "template"
+    if _LOREM_STAMP_RE.search(text):
+        return "lorem"
+    words = _WORD_RE.findall(text.lower())
+    if len(words) >= _LOREM_MIN_WORDS:
+        hits = sum(1 for w in words if w in _LATIN_STOPWORDS)
+        if hits / len(words) > _LOREM_FRACTION:
+            return "lorem"
+    return "real"
