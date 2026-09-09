@@ -63,7 +63,22 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   callbacks: {
     async signIn({ user }) {
       if (!user.email) return false;
-      const account = await findAllowedAccountByEmail(user.email);
+      // `return false` is a verdict: this account may not sign in. A lookup
+      // that THREW has reached no verdict at all, so it must not borrow one --
+      // Auth.js turns a false here into `error=AccessDenied`, which the login
+      // page reads as "not on the allowlist". Letting a connection failure
+      // take that path is how a rotated database password came to read as a
+      // revoked account on 2026-09-09. Rethrown with context so the cause
+      // reaches the runtime log instead of being flattened into a redirect.
+      let account: Awaited<ReturnType<typeof findAllowedAccountByEmail>>;
+      try {
+        account = await findAllowedAccountByEmail(user.email);
+      } catch (cause) {
+        throw new Error(
+          "allowlist lookup failed — AUTH_DB_URL may be unreachable or stale",
+          { cause },
+        );
+      }
       if (!account || account.status !== "active") return false;
       await touchLastSeen(account.id).catch(() => {
         // last_seen_at is a courtesy, not a gate — never block sign-in on it

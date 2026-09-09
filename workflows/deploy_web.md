@@ -195,21 +195,57 @@ readable here too, rather than only being discovered when CI goes red.
 
 The GitHub repo is connected to the Vercel project (production branch `main`,
 **Root Directory `web`** — the repo root has no `package.json`, so a
-git-triggered build fails without it). **A push to `main` deploys.** The CLI
-below is the fallback:
+git-triggered build fails without it). **A push to `main` deploys**, and that
+is the normal route; reach for the CLI only to force a rebuild, which is what
+picks up a changed environment variable.
 
 ```sh
-cd web && npx vercel --prod --yes --scope <team>
+cd web && npx vercel redeploy <deployment-url>     # rebuild, current env vars
 ```
 
-The CLI always prints a *"Promote to production"* line in its closing `next`
-block — it is a generic hint, not a sign the deploy stayed in preview. Read
-`readyState` and `target` in the JSON instead, then confirm the alias actually
-moved:
+**Not `cd web && vercel --prod`.** That was written here and cannot work: the
+project's Root Directory is `web`, so running the CLI from inside `web/`
+uploads that directory as the root and Vercel then looks for `web/web/` —
+`The specified Root Directory "web" does not exist`. Git-triggered builds are
+unaffected because they upload the repo root, which is why this went unnoticed
+until someone deployed by hand. `redeploy` sidesteps the whole question by
+reusing an existing deployment's source, and it is the right verb anyway when
+the reason to deploy is an env change rather than a code change.
+
+`vercel ls` gives the deployment URL to pass it. The CLI always prints a
+*"Promote to production"* line in its closing `next` block — it is a generic
+hint, not a sign the deploy stayed in preview. Read `readyState` and `target`
+in the JSON instead, then confirm the alias actually moved:
 
 ```sh
 vercel inspect arch-ive.vercel.app --scope <team>   # url must be the new deployment
 ```
+
+**A rotated password does not reach Vercel on its own.** `scripts/load_neon.sh`
+generates new passwords for `arch_app`, `arch_read` and `arch_auth` on every
+run and writes them into `.env`. The deployment keeps whatever it was given
+last. On 2026-09-09 that gap read as *"That Google account is not on the
+allowlist"* — the sign-in role could not connect, and a lookup that cannot run
+used to render as a lookup that found nothing. So after any `load_neon.sh`:
+replace `DATABASE_URL`, `DATABASE_URL_READONLY` and `AUTH_DB_URL`, then
+**redeploy** — an env var changes nothing until a build picks it up.
+
+```sh
+cd web
+for pair in AUTH_DB_URL:NEON_AUTH_DB_URL \
+            DATABASE_URL:NEON_DATABASE_URL \
+            DATABASE_URL_READONLY:NEON_DATABASE_URL_READONLY; do
+  V=${pair%%:*}; L=${pair##*:}
+  npx vercel env rm "$V" production --yes
+  grep -E "^$L=" ../.env | cut -d= -f2- | npx vercel env add "$V" production
+done
+```
+
+`env add` will not overwrite, hence the `rm` first; piping from `.env` keeps
+the value out of shell history. `vercel env pull` cannot read these back —
+they are marked Sensitive and pull writes the literal string `[SENSITIVE]`, so
+comparing a pulled file against `.env` compares placeholders and reports every
+variable as matching or differing for the wrong reason.
 
 Environment variables live in the Vercel project, not in the repo:
 `DATABASE_URL` (**pooled**), `AUTH_DB_URL` (the `arch_auth` role),

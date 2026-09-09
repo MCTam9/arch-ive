@@ -82,8 +82,33 @@ export default async function LoginPage({
               fontSize: "var(--fs-sm)",
             }}
           >
-            That Google account is not on the allowlist. Check which account you
-            signed in with — the allowlist matches on email address.
+            {/* A lookup that found nothing and a lookup that could not RUN mean
+                completely different things, and this rendered both as the
+                first. On 2026-09-09 the sign-in DSN in the deployment
+                environment was a rotated-away password, so `arch_auth` could
+                not connect at all — and this page told the owner their own
+                account was not on the allowlist, while the row sat there,
+                active. Two accounts were re-added chasing that message.
+
+                So the accusatory message is now the SPECIAL case, not the
+                default: Auth.js sends `AccessDenied` only when the signIn
+                callback deliberately returned false, which is the one state we
+                actually know means "not allowed". Everything else — a thrown
+                lookup, a misconfiguration, an error code added by a future
+                Auth.js — falls through to a message that blames this end,
+                because that is where the fault almost certainly is. */}
+            {error === "AccessDenied" ? (
+              <>
+                That Google account is not on the allowlist. Check which account
+                you signed in with — the allowlist matches on email address.
+              </>
+            ) : (
+              <>
+                Could not check your access just now. That is a fault at this
+                end, not with your account — try again in a moment. If it keeps
+                happening, the sign-in database is unreachable.
+              </>
+            )}
           </p>
         )}
 
