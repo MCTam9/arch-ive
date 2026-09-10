@@ -108,6 +108,27 @@ a separate database via `tests/conftest.py`; do not defeat that redirect.
   nothing ever referenced it. An extractor that stops emitting a scale does not
   remove it either — `_upsert_rating_scales` is `ON CONFLICT DO UPDATE` and
   never deletes — so the cleanup is always a migration.
+
+  Naming a seeded one is not the whole rule, because more than one is seeded.
+  **Name the ladder the document itself defines** — read for it, in the
+  glossary, the legend, the column headers. `masterplan-sustainability` was
+  wired to `smart-city-contribution` on the grounds that it was seeded,
+  crosswalked and not yet taken, which is picking by shape; the volume's own
+  glossary defines a target as identifiable "into three levels: baseline
+  (business-as-usual), stretch or aspirational, and pioneering", which is
+  `framework-targets` — seeded for exactly this and wired to nothing. The check
+  that would have caught it costs one query: **if the scale is right, its level
+  names appear in the document.** Not one of the four appeared anywhere in the
+  195 pages of the two volumes that extractor reads.
+- **Declare every level you reference.** `tools/write_extraction.py` resolves a
+  requirement's `rating_level_id` only through the ref map built from
+  `extraction.rating_levels`. A ref naming a level the extraction never emits
+  does not raise — it resolves to NULL, and the requirement lands unlevelled
+  next to 63 others that did the same thing. Name the seeded rows again in
+  `ext.rating_levels`; the upsert is `ON CONFLICT DO UPDATE` with `COALESCE`,
+  so it cannot overwrite them. Assert the ref **resolves**, not that it is
+  non-empty — `test_compliance_table_grades_against_the_scale_the_volume_defines`
+  is what that looks like.
 - **A framework needs its `rating_scale_ref`.** It is what
   `framework.rating_scale_id` becomes, and the web matrix reads that to work
   out which level columns exist. `compliance_table.py` passed `None`, so all 62
